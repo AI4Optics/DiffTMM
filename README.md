@@ -158,6 +158,7 @@ The isotropic 2x2 solver uses ~5x less GPU memory than the anisotropic 4x4 solve
 
 - S. J. Byrnes, "Multilayer optical calculations," [arXiv:1603.02720](https://arxiv.org/abs/1603.02720)
 - Steven Byrnes' TMM library: [github.com/sbyrnes321/tmm](https://github.com/sbyrnes321/tmm)
+- "End-to-end differentiable design of geometric waveguide displays"
 
 ## License
 
