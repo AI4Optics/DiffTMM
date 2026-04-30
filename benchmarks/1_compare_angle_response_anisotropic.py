@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import torch
 from numpy import array, inf, linspace, pi
 
-from film_solver_anisotropic import create_jones_matrix_AOIAz
+from difftmm import create_jones_matrix_AOIAz
 from tmm_numpy.tmm_core import (
     coh_tmm,
     ellips,

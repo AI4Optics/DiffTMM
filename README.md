@@ -22,13 +22,13 @@ pip install torch numpy matplotlib scipy
 
 ## Quick Start
 
-### Forward Simulation (`1_forward_simu.py`)
+### Forward Simulation (`1_forward_simu.ipynb`)
 
 Initialize a film stack with known refractive indices and thicknesses, then compute Fresnel coefficients at arbitrary wavelengths and angles.
 
 ```python
 import torch
-from film_solver_isotropic import IsotropicFilmSolver
+from difftmm import IsotropicFilmSolver
 
 # Define film stack: Glass | Ta2O5 | SiO2 | Ta2O5 | Glass
 solver = IsotropicFilmSolver(
@@ -45,13 +45,13 @@ ts, tp, rs, rp = solver.simulate(theta=angles, wvln=[0.45, 0.55, 0.65])
 # Output shape: (n_mirrors, n_wvlns, n_angles)
 ```
 
-### Inverse Design via Differentiable Optimization (`2_inverse_design.py`)
+### Inverse Design via Differentiable Optimization (`2_inverse_design.ipynb`)
 
 Given target Fresnel coefficients, recover unknown film thicknesses using gradient-based optimization.
 
 ```python
 import torch
-from film_solver_isotropic import create_jones_matrix_isotropic
+from difftmm import create_jones_matrix_isotropic
 
 # Film stack with unknown thicknesses
 n_list = torch.tensor([2.10, 1.46, 2.10, 1.46, 2.10], device="cuda")
@@ -84,8 +84,8 @@ Layer     GT (nm)   Recovered (nm)    Error (nm)
 
 ## Two Solvers
 
-- **`film_solver_isotropic.py`** — Fast 2x2 transfer matrix method for isotropic materials (~200x faster than NumPy TMM)
-- **`film_solver_anisotropic.py`** — General 4x4 transfer matrix method for both isotropic and anisotropic materials
+- **`difftmm.IsotropicFilmSolver`** — Fast 2x2 transfer matrix method for isotropic materials (~200x faster than NumPy TMM)
+- **`difftmm.FilmSolver`** (also `AnisotropicFilmSolver`) — General 4x4 transfer matrix method for both isotropic and anisotropic materials
 
 Both solvers share the same API:
 
@@ -132,10 +132,12 @@ The isotropic 2x2 solver uses ~5x less GPU memory than the anisotropic 4x4 solve
 ## Repository Structure
 
 ```
-├── film_solver_isotropic.py        # 2x2 isotropic solver (fast)
-├── film_solver_anisotropic.py      # 4x4 anisotropic solver (general)
-├── 1_forward_simu.py               # Example: forward simulation
-├── 2_inverse_design.py             # Example: differentiable inverse design
+├── difftmm/                        # Importable package
+│   ├── __init__.py                 #   Public API
+│   ├── film_solver_isotropic.py    #   2x2 isotropic solver (fast)
+│   └── film_solver_anisotropic.py  #   4x4 anisotropic solver (general)
+├── 1_forward_simu.ipynb            # Example: forward simulation
+├── 2_inverse_design.ipynb          # Example: differentiable inverse design
 ├── tmm_numpy/                      # Reference NumPy TMM library (isotropic only)
 │   ├── tmm_core.py                 #   Steven Byrnes' TMM implementation
 │   └── manual.pdf                  #   Physics reference
@@ -143,6 +145,8 @@ The isotropic 2x2 solver uses ~5x less GPU memory than the anisotropic 4x4 solve
 │   ├── 1_compare_angle_response_*.py
 │   ├── 2_compare_speed.py
 │   └── 3_compare_memory.py
+├── pyproject.toml                  # Packaging metadata
+├── CITATION.cff                    # Citation metadata
 └── README.md
 ```
 

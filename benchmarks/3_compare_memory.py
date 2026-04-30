@@ -22,8 +22,7 @@ import numpy as np
 import torch
 from numpy import pi
 
-from film_solver_anisotropic import create_jones_matrix_AOIAz
-from film_solver_isotropic import create_jones_matrix_isotropic
+from difftmm import create_jones_matrix_AOIAz, create_jones_matrix_isotropic
 
 
 def measure_peak_memory(func, *args, **kwargs):

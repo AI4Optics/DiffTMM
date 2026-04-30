@@ -1,0 +1,47 @@
+cff-version: 1.2.0
+message: "If you use DiffTMM in your research, please cite both the software and the accompanying paper."
+title: "DiffTMM: Differentiable Transfer Matrix Method"
+abstract: "A PyTorch-based differentiable thin film solver for multi-layer optical coatings. Supports both isotropic and anisotropic materials with full autograd for inverse design."
+type: software
+authors:
+  - family-names: Yang
+    given-names: Xinge
+    email: singer.yang.yxg@gmail.com
+repository-code: "https://github.com/singer-yang/DiffTMM"
+license: Apache-2.0
+keywords:
+  - transfer-matrix-method
+  - thin-film
+  - optics
+  - photonics
+  - pytorch
+  - differentiable-programming
+  - inverse-design
+  - anisotropic
+  - birefringence
+  - optical-coatings
+preferred-citation:
+  type: article
+  title: "End-to-end differentiable design of geometric waveguide displays"
+  year: 2026
+  journal: "arXiv preprint"
+  identifiers:
+    - type: other
+      value: "arXiv:2601.04370"
+      description: "arXiv preprint identifier"
+  url: "https://arxiv.org/abs/2601.04370"
+  authors:
+    - family-names: Yang
+      given-names: Xinge
+    - family-names: Liu
+      given-names: Zheng
+    - family-names: Nie
+      given-names: Zhanghao
+    - family-names: Fan
+      given-names: Qiang
+    - family-names: Shi
+      given-names: Zheng
+    - family-names: Bonar
+      given-names: James
+    - family-names: Heidrich
+      given-names: Wolfgang

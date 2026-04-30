@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=64", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "difftmm"
+version = "0.1.0"
+description = "Differentiable transfer matrix method (TMM) in PyTorch for multi-layer thin film optics — supports anisotropic media, GPU batching, and gradient-based inverse design."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [
+    { name = "Xinge Yang", email = "singer.yang.yxg@gmail.com" },
+]
+keywords = [
+    "transfer-matrix-method",
+    "tmm",
+    "thin-film",
+    "optics",
+    "photonics",
+    "pytorch",
+    "differentiable-programming",
+    "inverse-design",
+    "anisotropic",
+    "birefringence",
+    "optical-coatings",
+    "fresnel-equations",
+    "gpu-acceleration",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "torch>=2.0",
+]
+
+[project.optional-dependencies]
+benchmarks = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+]
+notebooks = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "jupyter",
+]
+dev = [
+    "pytest",
+    "ruff",
+    "build",
+    "twine",
+]
+
+[project.urls]
+Homepage = "https://github.com/singer-yang/DiffTMM"
+Repository = "https://github.com/singer-yang/DiffTMM"
+Issues = "https://github.com/singer-yang/DiffTMM/issues"
+Paper = "https://arxiv.org/abs/2601.04370"
+
+[tool.setuptools.packages.find]
+include = ["difftmm*"]
+exclude = ["benchmarks*", "tmm_numpy*", "__pycache__*"]

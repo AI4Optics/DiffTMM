@@ -25,8 +25,7 @@ import torch
 from numpy import inf, linspace, pi
 
 from tmm_numpy.tmm_core import coh_tmm
-from film_solver_anisotropic import create_jones_matrix_AOIAz
-from film_solver_isotropic import create_jones_matrix_isotropic
+from difftmm import create_jones_matrix_AOIAz, create_jones_matrix_isotropic
 
 
 def benchmark_tmm_library(n_layers, n_angles=100, n_repeats=5, batch_size=1):
