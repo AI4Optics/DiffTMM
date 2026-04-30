@@ -104,17 +104,17 @@ ts, tp, rs, rp = solver.simulate(theta, wvln)
 
 Validated against the reference NumPy TMM library ([sbyrnes321/tmm](https://github.com/sbyrnes321/tmm)) on surface plasmon resonance (SPR) calculations:
 
-![SPR Comparison](benchmarks/surface_plasmon_resonance_all_coefficients.png)
+![SPR Comparison](https://raw.githubusercontent.com/singer-yang/DiffTMM/main/benchmarks/surface_plasmon_resonance_all_coefficients.png)
 
 The anisotropic 4x4 solver is validated for energy conservation, isotropic limit accuracy, cross-polarization coupling, and reciprocity:
 
-![Anisotropic Validation](benchmarks/anisotropic_tmm_comparison.png)
+![Anisotropic Validation](https://raw.githubusercontent.com/singer-yang/DiffTMM/main/benchmarks/anisotropic_tmm_comparison.png)
 
 ## Performance Benchmarks
 
 ### Speed (batch=16, NVIDIA A100)
 
-![Speed Comparison](benchmarks/speed_comparison_tmm_vs_film_solver_batch.png)
+![Speed Comparison](https://raw.githubusercontent.com/singer-yang/DiffTMM/main/benchmarks/speed_comparison_tmm_vs_film_solver_batch.png)
 
 | Layers | TMM NumPy (s) | Anisotropic 4x4 (s) | Isotropic 2x2 (s) | Speedup (4x4) | Speedup (2x2) |
 |--------|---------------|----------------------|--------------------|---------------|---------------|
@@ -125,7 +125,7 @@ The anisotropic 4x4 solver is validated for energy conservation, isotropic limit
 
 ### GPU Memory (batch=16, forward + backward)
 
-![Memory Comparison](benchmarks/memory_comparison_solvers.png)
+![Memory Comparison](https://raw.githubusercontent.com/singer-yang/DiffTMM/main/benchmarks/memory_comparison_solvers.png)
 
 The isotropic 2x2 solver uses ~5x less GPU memory than the anisotropic 4x4 solver. NumPy TMM is CPU-only (0 GPU memory).
 
