@@ -1,6 +1,6 @@
 # DiffTMM: Differentiable Transfer Matrix Method
 
-A PyTorch-based differentiable thin film solver for multi-layer optical coatings. Supports both isotropic and anisotropic (birefringent) materials with full autograd for gradient-based inverse design.
+A PyTorch-based differentiable thin film solver for multi-layer optical coatings. Supports both isotropic and anisotropic materials with full autograd for inverse design.
 
 ## Advantages over NumPy TMM
 
@@ -10,7 +10,7 @@ A PyTorch-based differentiable thin film solver for multi-layer optical coatings
 | GPU acceleration | No (CPU only) | Yes (CUDA) |
 | Batch processing | No (sequential) | Yes (vectorized) |
 | Anisotropic materials | No (isotropic only) | Yes (4x4 transfer matrix) |
-| Speed (batch=16) | 1x baseline | **~200x** (isotropic 2x2), **~5x** (anisotropic 4x4) |
+| Speed (batch=16) | 1x baseline | **~200x** (isotropic 2x2) |
 
 ## Installation
 
@@ -158,7 +158,7 @@ The isotropic 2x2 solver uses ~5x less GPU memory than the anisotropic 4x4 solve
 
 - S. J. Byrnes, "Multilayer optical calculations," [arXiv:1603.02720](https://arxiv.org/abs/1603.02720)
 - Steven Byrnes' TMM library: [github.com/sbyrnes321/tmm](https://github.com/sbyrnes321/tmm)
-- "End-to-end differentiable design of geometric waveguide displays"
+- Yang, X., Liu, Z., Nie, Z., Fan, Q., Shi, Z., Bonar, J., & Heidrich, W. (2026). "End-to-end differentiable design of geometric waveguide displays." *arXiv preprint* [arXiv:2601.04370](https://arxiv.org/abs/2601.04370)
 
 ## License
 
