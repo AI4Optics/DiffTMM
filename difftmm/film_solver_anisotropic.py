@@ -443,48 +443,15 @@ def create_jones_matrix_AOIAz(
     Q_6d[:, :, :, :, :, 3, 1] = -eyz_4d * sin_Vt_4d / ezz_4d
     Q_6d[:, :, :, :, :, 3, 2] = eyy_4d - eyz_4d * ezy_4d / ezz_4d - sin_Vt_4d**2
 
-    # Batch eigenvalue decomposition for ALL layers at once
-    # Q_6d shape: (batchsize, num_wv, num_x, num_y, num_layer, 4, 4)
-    # Reshape to (batchsize * num_wv * num_x * num_y * num_layer, 4, 4)
-    Q_flat = Q_6d.view(-1, 4, 4)
-    eigenvalues_flat, eigenvectors_flat = torch.linalg.eig(Q_flat)
-
-    # Ensure consistent dtype (complex64) for all tensors
     dtype = torch.complex64
-    eigenvalues_flat = eigenvalues_flat.to(dtype)
-    eigenvectors_flat = eigenvectors_flat.to(dtype)
-
-    # Reshape back: (batchsize, num_wv, num_x, num_y, num_layer, 4)
-    eigenvalues_all = eigenvalues_flat.view(
-        batchsize, num_wv, num_x, num_y, num_layer, 4
-    )
-    # (batchsize, num_wv, num_x, num_y, num_layer, 4, 4)
-    eigenvectors_all = eigenvectors_flat.view(
-        batchsize, num_wv, num_x, num_y, num_layer, 4, 4
-    )
-
-    # Compute k0 * d for all layers: (batchsize, num_wv, 1, 1, num_layer)
     k0_1d_exp = k0_1d.reshape(batchsize, num_wv, 1, 1, 1).to(dtype)
     d_1d_exp = d_1d.reshape(batchsize, 1, 1, 1, num_layer).to(dtype)
-    k0d = k0_1d_exp * d_1d_exp  # (batchsize, num_wv, 1, 1, num_layer)
+    k0d = k0_1d_exp * d_1d_exp
 
-    # Compute phase factors for all layers: exp(1j * k0 * d * eigenvalue)
-    # eigenvalues_all: (batchsize, num_wv, num_x, num_y, num_layer, 4)
-    phase_factors = torch.exp(1j * k0d.unsqueeze(-1) * eigenvalues_all)
-    # phase_factors: (batchsize, num_wv, num_x, num_y, num_layer, 4)
-
-    # Build diagonal U matrices efficiently using diag_embed
-    # U shape: (batchsize, num_wv, num_x, num_y, num_layer, 4, 4)
-    U_all = torch.diag_embed(phase_factors)
-
-    # Compute Pn = V @ U @ V^(-1) for all layers
-    # For 4x4 matrices, direct inverse is efficient
-    V_flat = eigenvectors_all.reshape(-1, 4, 4)
-    V_inv_flat = torch.linalg.inv(V_flat)
-    V_inv_all = V_inv_flat.view(batchsize, num_wv, num_x, num_y, num_layer, 4, 4)
-
-    # Pn = V @ U @ V_inv for each layer (batched matmul)
-    Pn_all = torch.matmul(torch.matmul(eigenvectors_all, U_all), V_inv_all)
+    # gradient-stable: avoids linalg_eig_backward eigenvector phase ambiguity
+    exponent = 1j * k0d.unsqueeze(-1).unsqueeze(-1) * Q_6d
+    Pn_flat = torch.linalg.matrix_exp(exponent.reshape(-1, 4, 4))
+    Pn_all = Pn_flat.view(batchsize, num_wv, num_x, num_y, num_layer, 4, 4)
 
     # Sequential multiplication of layer transfer matrices P = Pn[n-1] @ ... @ Pn[1] @ Pn[0]
     # Start with first layer's transfer matrix
