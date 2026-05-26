@@ -240,7 +240,7 @@ def test_inc_one_coherent_layer_between_incoherent_matches_coh_tmm():
     assert np.allclose(Tp.item(), ref_p["T"], rtol=RTOL, atol=ATOL)
 
 
-def test_inc_thin_film_on_thick_substrate_matches_random_avg_of_coh_tmm():
+def test_inc_thin_film_on_thick_substrate_matches_tmm_numpy_inc_tmm():
     """The motivating use case: thin film on a thick incoherent substrate.
 
     Stack: air | 100nm Ta2O5 (real n) | thick glass substrate | air.
@@ -440,6 +440,55 @@ def test_incoherent_solver_requires_c_list_length_to_match_layers():
             c_list=["c"],  # too short
             device=torch.device("cpu"),
         )
+
+
+def test_inc_multi_stack_separated_by_incoherent_matches_reference():
+    """Two coherent stacks separated by an interior incoherent layer.
+
+    This is the regression test for the C1 bug: when the left bracket of a
+    stack is not n_in, the sub-stack solver needs the Snell-propagated angle
+    in that bracketing medium, not the user's incidence angle.
+    """
+    # Stack: air | 100nm film_a | 50um water | 80nm film_b | glass
+    # c_list_full: ['i', 'c', 'i', 'c', 'i']
+    n_air, n_film_a, n_water, n_film_b, n_glass = 1.0, 2.10, 1.33, 1.80, 1.52
+    d_film_a = 0.100  # um
+    d_water = 50.0    # um, incoherent
+    d_film_b = 0.080
+    theta = 0.6       # ~34.4 deg -- non-normal incidence is essential to surface the bug
+    wv = 0.633        # um
+
+    n_list_full = [n_air, n_film_a, n_water, n_film_b, n_glass]
+    c_list_full = ["i", "c", "i", "c", "i"]
+    c_list_interior = ["c", "i", "c"]
+    ref_d_nm = [INF, 100.0, 50000.0, 80.0, INF]
+
+    ref_s = ref_inc_tmm("s", n_list_full, ref_d_nm, c_list_full, theta, 633.0)
+    ref_p = ref_inc_tmm("p", n_list_full, ref_d_nm, c_list_full, theta, 633.0)
+
+    n_t = torch.tensor([[n_film_a, n_water, n_film_b]], dtype=torch.complex64)
+    d_t = torch.tensor([[d_film_a, d_water, d_film_b]], dtype=torch.float32)
+    wv_t = torch.tensor([[wv]], dtype=torch.float32)
+    th_t = torch.tensor([[theta]], dtype=torch.float32)
+
+    Rs, Rp, Ts, Tp = create_intensity_RT_isotropic(
+        n_t, d_t, wv_t, n_in=n_air, n_out=n_glass,
+        theta_1d=th_t, c_list=c_list_interior,
+    )
+
+    # Tight tolerance: this is the configuration where the fix matters most.
+    assert np.allclose(Rs.item(), ref_s["R"], rtol=1e-4, atol=1e-5), (
+        f"Rs: got {Rs.item():.6f}, expected {ref_s['R']:.6f}"
+    )
+    assert np.allclose(Rp.item(), ref_p["R"], rtol=1e-4, atol=1e-5), (
+        f"Rp: got {Rp.item():.6f}, expected {ref_p['R']:.6f}"
+    )
+    assert np.allclose(Ts.item(), ref_s["T"], rtol=1e-4, atol=1e-5), (
+        f"Ts: got {Ts.item():.6f}, expected {ref_s['T']:.6f}"
+    )
+    assert np.allclose(Tp.item(), ref_p["T"], rtol=1e-4, atol=1e-5), (
+        f"Tp: got {Tp.item():.6f}, expected {ref_p['T']:.6f}"
+    )
 
 
 def test_public_api_exposes_incoherent_symbols():

@@ -7,7 +7,6 @@ for multi-layer film stacks with full autograd support.
 Copyright (c) 2026, Xinge Yang, Qingyuan Fan, Zhaocheng Liu.
 """
 
-import os
 from typing import Dict, List, Optional, Sequence
 
 import torch
@@ -814,6 +813,13 @@ def create_intensity_RT_isotropic(
 
     Returns:
         Rs, Rp, Ts, Tp: real tensors, each shape (batch, n_wls, n_angles), in [0, 1].
+
+    Note:
+        Inside any coherent sub-stack, the refractive indices of the
+        bracketing incoherent layers must be identical across the batch
+        dimension. Heterogeneous per-batch indices in stack-bracketing
+        layers raise ValueError. Per-batch interior coherent-layer indices
+        are still supported.
     """
     if len(c_list) != n_layers_1d.shape[1]:
         raise ValueError(
@@ -934,6 +940,23 @@ def _inc_total_RT_for_all_pols(
 
         n_left = n_full[:, left_inc_alllayer]   # (batch,) complex
         n_right = n_full[:, right_inc_alllayer]
+
+        # Sub-stack solver requires scalar n_in/n_out per stack. Reject heterogeneous
+        # batches that would silently use only the first batch row's index.
+        if n_left.numel() > 1 and not torch.all(n_left == n_left[0]):
+            raise ValueError(
+                f"Stack {s_idx} has heterogeneous refractive index in its left "
+                f"bracketing layer across the batch dimension. Per-batch n_in/n_out "
+                f"in coherent sub-stacks is not yet supported. Use a single set of "
+                f"refractive indices across the batch."
+            )
+        if n_right.numel() > 1 and not torch.all(n_right == n_right[0]):
+            raise ValueError(
+                f"Stack {s_idx} has heterogeneous refractive index in its right "
+                f"bracketing layer across the batch dimension. Per-batch n_in/n_out "
+                f"in coherent sub-stacks is not yet supported."
+            )
+
         n_left_scalar = complex(n_left[0].item())
         n_right_scalar = complex(n_right[0].item())
 
@@ -941,16 +964,21 @@ def _inc_total_RT_for_all_pols(
         n_coh = n_full.index_select(1, idx_coh)            # (batch, n_coh)
         d_coh = d_full.index_select(1, idx_coh).to(real_dtype)
 
+        # Compute local angles in the bracketing media via Snell propagation.
+        # cos_th_layers is already Snell-propagated from the user's theta_1d in n_in.
+        sin_left = torch.sqrt(1 - cos_th_layers[:, left_inc_alllayer] ** 2)   # (batch, angles), complex
+        theta_left = torch.arcsin(torch.clamp(sin_left.real, -1.0, 1.0)).to(real_dtype)
+        sin_right = torch.sqrt(1 - cos_th_layers[:, right_inc_alllayer] ** 2)
+        theta_right = torch.arcsin(torch.clamp(sin_right.real, -1.0, 1.0)).to(real_dtype)
+
         Rs_fwd, Rp_fwd, Ts_fwd, Tp_fwd = coh_stack_power_RT_isotropic(
-            n_coh, d_coh, wv_1d, n_left_scalar, n_right_scalar, theta_1d
+            n_coh, d_coh, wv_1d, n_left_scalar, n_right_scalar, theta_left
         )
 
-        # Backward: reverse layer order and swap media.
+        # Backward: reverse layer order and swap media, use the angle in the
+        # right bracketing medium as the incident angle.
         n_coh_rev = torch.flip(n_coh, dims=[1])
         d_coh_rev = torch.flip(d_coh, dims=[1])
-        sin_th_in_local = torch.sin(theta_1d).to(complex_dtype)
-        sin_th_right = (n_in * sin_th_in_local) / n_right_scalar
-        theta_right = torch.arcsin(torch.clamp(sin_th_right.real, -1.0, 1.0)).to(real_dtype)
         Rs_bwd, Rp_bwd, Ts_bwd, Tp_bwd = coh_stack_power_RT_isotropic(
             n_coh_rev, d_coh_rev, wv_1d, n_right_scalar, n_left_scalar, theta_right
         )
