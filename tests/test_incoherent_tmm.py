@@ -391,3 +391,52 @@ def test_inc_optimization_loop_reduces_loss():
     assert losses[-1] < losses[0] * 0.5, (
         f"Optimization didn't reduce loss: start={losses[0]:.4f}, end={losses[-1]:.4f}"
     )
+
+
+from difftmm.film_solver_isotropic import IncoherentIsotropicFilmSolver  # noqa: E402
+
+
+def test_incoherent_solver_class_matches_functional_api():
+    """The IncoherentIsotropicFilmSolver class must match the functional create_intensity_RT_isotropic."""
+    # Real indices to dodge float32 precision issue with lossy films.
+    n_air, n_film, n_sub = 1.0, 2.10, 1.52
+    c_list = ["c", "i"]
+    thetas = torch.linspace(0.0, 1.0, 8)
+    wvs = [0.500, 0.600]
+
+    solver = IncoherentIsotropicFilmSolver(
+        mat_n_in=n_air,
+        mat_n_out=n_air,
+        mat_n_ls=[n_film, n_sub],
+        thickness_ls=[0.100, 500.0],
+        c_list=c_list,
+        device=torch.device("cpu"),
+    )
+    Rs_c, Rp_c, Ts_c, Tp_c = solver.simulate(theta=thetas, wvln=wvs)
+
+    # Functional reference.
+    n_t = torch.tensor([[n_film, n_sub]], dtype=torch.complex64)
+    d_t = torch.tensor([[0.100, 500.0]], dtype=torch.float32)
+    wv_t = torch.tensor([wvs], dtype=torch.float32)
+    th_t = thetas.unsqueeze(0)
+    Rs_f, Rp_f, Ts_f, Tp_f = create_intensity_RT_isotropic(
+        n_t, d_t, wv_t, n_in=n_air, n_out=n_air, theta_1d=th_t, c_list=c_list,
+    )
+
+    assert torch.allclose(Rs_c, Rs_f, atol=1e-6)
+    assert torch.allclose(Rp_c, Rp_f, atol=1e-6)
+    assert torch.allclose(Ts_c, Ts_f, atol=1e-6)
+    assert torch.allclose(Tp_c, Tp_f, atol=1e-6)
+    # Shapes: (batch=1, n_wv=2, n_angles=8)
+    assert Rs_c.shape == (1, 2, 8)
+
+
+def test_incoherent_solver_requires_c_list_length_to_match_layers():
+    with pytest.raises(ValueError, match="c_list length"):
+        IncoherentIsotropicFilmSolver(
+            mat_n_in=1.0, mat_n_out=1.0,
+            mat_n_ls=[2.0, 1.5],
+            thickness_ls=[0.100, 500.0],
+            c_list=["c"],  # too short
+            device=torch.device("cpu"),
+        )

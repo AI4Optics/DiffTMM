@@ -1061,3 +1061,148 @@ def _inc_total_RT_for_all_pols(
     Rp_t, Tp_t = _accumulate("p")
     return Rs_t, Rp_t, Ts_t, Tp_t
 
+
+# =========================
+# Solver class
+# =========================
+class IncoherentIsotropicFilmSolver:
+    """Multi-layer coating solver with partly-incoherent layer support.
+
+    Same UX as IsotropicFilmSolver but additionally accepts a ``c_list``
+    argument that marks each interior layer as coherent ('c') or
+    incoherent ('i'). Returns real power coefficients (Rs, Rp, Ts, Tp)
+    rather than complex amplitudes, because incoherent calculations
+    discard phase by design.
+    """
+
+    def __init__(
+        self,
+        mat_n_in,
+        mat_n_out,
+        mat_n_ls,
+        c_list,
+        thickness_ls=None,
+        thickness_min=0.0,
+        thickness_max=1000.0,  # in um; allow thick substrates by default
+        batch_size=1,
+        sigmoid_param=False,
+        device=torch.device("cuda"),
+    ):
+        """Initialize the incoherent isotropic film solver.
+
+        Args:
+            mat_n_in: scalar incident refractive index.
+            mat_n_out: scalar exit refractive index.
+            mat_n_ls: refractive indices of interior layers (list or tensor of length N).
+            c_list: list of 'c'/'i' codes, length N. One per interior layer.
+            thickness_ls: thicknesses of interior layers in um, length N. If None,
+                          random.
+            thickness_min: minimum thickness in um (used for sigmoid bounds).
+            thickness_max: maximum thickness in um.
+            batch_size: number of film stacks in the batch.
+            sigmoid_param: if True, use sigmoid parameterization.
+            device: torch device.
+
+        Raises:
+            ValueError: if c_list length does not match the number of interior layers
+                        or contains invalid codes.
+        """
+        self.batch_size = batch_size
+        self.mat_n_in = float(mat_n_in) if not isinstance(mat_n_in, complex) else complex(mat_n_in)
+        self.mat_n_out = float(mat_n_out) if not isinstance(mat_n_out, complex) else complex(mat_n_out)
+        self.device = device
+
+        if torch.is_tensor(mat_n_ls):
+            n_layers_t = mat_n_ls.to(torch.complex64)
+        else:
+            n_layers_t = torch.tensor(mat_n_ls, dtype=torch.complex64)
+        self.num_layers = len(n_layers_t)
+
+        if len(c_list) != self.num_layers:
+            raise ValueError(
+                f"c_list length {len(c_list)} does not match number of interior "
+                f"layers {self.num_layers}."
+            )
+        for code in c_list:
+            if code not in ("c", "i"):
+                raise ValueError("c_list entries must be 'c' or 'i'.")
+        self.c_list = list(c_list)
+
+        self.refract_idx_layers = n_layers_t.unsqueeze(0).expand(batch_size, -1).clone()
+
+        self.thickness_min = thickness_min
+        self.thickness_max = thickness_max
+        self._thickness_range = thickness_max - thickness_min
+
+        self.sigmoid_param = sigmoid_param
+        if thickness_ls is not None:
+            if not torch.is_tensor(thickness_ls):
+                thickness_ls = torch.tensor(thickness_ls, dtype=torch.float32)
+            normalized = (
+                thickness_ls.clamp(thickness_min, thickness_max) - thickness_min
+            ) / max(self._thickness_range, 1e-30)
+            self.film_params = normalized.unsqueeze(0).expand(batch_size, -1).clone()
+        else:
+            self.film_params = torch.randn(batch_size, self.num_layers) * 0.01 + 0.5
+
+        if self.sigmoid_param:
+            self.film_params = inv_sigmoid(self.film_params.clamp(1e-6, 1 - 1e-6))
+
+        self.to(device)
+
+    def to(self, device):
+        """Move tensors to specified device."""
+        self.device = device
+        self.film_params = self.film_params.to(device, non_blocking=True)
+        self.refract_idx_layers = self.refract_idx_layers.to(device, non_blocking=True)
+        return self
+
+    def get_film_thickness(self):
+        """Convert optimization-friendly film parameters to real film thickness.
+
+        Returns:
+            film_thickness: tensor of shape (batch_size, num_layers), in [um].
+        """
+        if self.sigmoid_param:
+            return (
+                torch.sigmoid(self.film_params) * self._thickness_range + self.thickness_min
+            )
+        thickness = self.film_params * self._thickness_range + self.thickness_min
+        return thickness.clamp(self.thickness_min, self.thickness_max)
+
+    def simulate(self, theta, wvln):
+        """Compute (Rs, Rp, Ts, Tp) for the configured stack.
+
+        Args:
+            theta: angles in radians. 1D of shape (n_angles,) or 2D (batch, n_angles).
+            wvln: wavelengths in um. Scalar, list, or 1D tensor.
+
+        Returns:
+            Rs, Rp, Ts, Tp: real tensors of shape (batch, n_wvlns, n_angles).
+        """
+        if not torch.is_tensor(theta):
+            theta = torch.tensor(theta, dtype=torch.float32, device=self.device)
+        theta = theta.to(self.device)
+        if theta.dim() == 1:
+            theta = theta.unsqueeze(0).expand(self.batch_size, -1)
+
+        if torch.is_tensor(wvln):
+            wv = wvln.to(self.device)
+            if wv.dim() == 0:
+                wv = wv.unsqueeze(0)
+        elif isinstance(wvln, (list, tuple)):
+            wv = torch.tensor(wvln, dtype=torch.float32, device=self.device)
+        else:
+            wv = torch.tensor([wvln], dtype=torch.float32, device=self.device)
+        wv_batch = wv.unsqueeze(0).expand(self.batch_size, -1)
+
+        d_batch = self.get_film_thickness()
+        return create_intensity_RT_isotropic(
+            self.refract_idx_layers, d_batch, wv_batch,
+            self.mat_n_in, self.mat_n_out, theta, self.c_list,
+        )
+
+    def __call__(self, theta, wvln):
+        """Forward pass using simulate."""
+        return self.simulate(theta, wvln)
+
