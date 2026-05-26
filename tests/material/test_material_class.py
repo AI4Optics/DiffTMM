@@ -101,3 +101,25 @@ class TestInterpRealN:
         # First table point is (0.40, 1.4701)
         wvln = torch.tensor([0.40])
         assert abs(mat.ior(wvln).real.item() - 1.4701) < 1e-4
+
+
+class TestInterpNK:
+    def test_sio2_zero_extinction(self, wvln_vis):
+        mat = Material("SiO2")
+        assert mat.dispersion == "interp"
+        n = mat.ior(wvln_vis)
+        torch.testing.assert_close(n.imag, torch.zeros_like(wvln_vis))
+
+    def test_silver_has_extinction(self):
+        mat = Material("Ag")
+        n = mat.ior(torch.tensor([0.55]))
+        assert n.imag.item() > 0.5  # k is large for Ag in visible
+
+    def test_silver_lowercase_lookup(self):
+        # NK_TABLE materials are looked up case-insensitively
+        m1 = Material("Ag")
+        m2 = Material("ag")
+        assert m1.dispersion == m2.dispersion
+        # Same table => identical output
+        wvln = torch.tensor([0.55])
+        torch.testing.assert_close(m1.ior(wvln), m2.ior(wvln))

@@ -81,6 +81,14 @@ _SELLMEIER_TABLE: dict = _CUSTOM_DATA.get("SELLMEIER_TABLE", {})
 _MATERIAL_TABLE: dict = _CUSTOM_DATA.get("MATERIAL_TABLE", {})
 _INTERP_TABLE: dict = _CUSTOM_DATA.get("INTERP_TABLE", {})
 
+_THINFILM_DATA: dict = _read_json_catalog(
+    os.path.join(_CATALOGS_DIR, "thin_film_materials.json")
+)
+# Build a case-insensitive lookup map name_lower -> entry
+_INTERP_NK_TABLE: dict = {
+    k.lower(): v for k, v in _THINFILM_DATA.get("INTERP_NK_TABLE", {}).items()
+}
+
 MATERIAL_data: dict = {
     **_AGF_DATA,
     **{k: {"source": "json"} for k in _SELLMEIER_TABLE if k not in _AGF_DATA},
@@ -188,6 +196,22 @@ class Material:
             self._ref_n = torch.tensor(entry["n"], dtype=torch.float32)
             self._ref_k = None
             # Compute nd, V from the table for completeness
+            d_wvln = torch.tensor([0.5876])
+            F_wvln = torch.tensor([0.4861])
+            C_wvln = torch.tensor([0.6563])
+            nd = _linear_interp_complex(d_wvln, self._ref_wvlns, self._ref_n).real.item()
+            nF = _linear_interp_complex(F_wvln, self._ref_wvlns, self._ref_n).real.item()
+            nC = _linear_interp_complex(C_wvln, self._ref_wvlns, self._ref_n).real.item()
+            self.n = nd
+            self.V = (nd - 1) / (nF - nC) if nF != nC else 1e38
+            return
+
+        if self.name in _INTERP_NK_TABLE:
+            entry = _INTERP_NK_TABLE[self.name]
+            self.dispersion = "interp"
+            self._ref_wvlns = torch.tensor(entry["wvlns"], dtype=torch.float32)
+            self._ref_n = torch.tensor(entry["n"], dtype=torch.float32)
+            self._ref_k = torch.tensor(entry["k"], dtype=torch.float32)
             d_wvln = torch.tensor([0.5876])
             F_wvln = torch.tensor([0.4861])
             C_wvln = torch.tensor([0.6563])
