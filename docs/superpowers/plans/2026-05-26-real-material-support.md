@@ -1580,46 +1580,139 @@ Now update `simulate` (line 492). Replace the body starting at line 526:
         return ts, tp, rs, rp
 ```
 
-- [ ] **Step 4: Update `save_ckpt` to fail clearly for material-bearing stacks**
+- [ ] **Step 4: Make `save_ckpt` / `load_ckpt` persist material names**
 
-In `difftmm/film_solver_isotropic.py`, replace the body of `save_ckpt` (line 458):
+In `difftmm/film_solver_isotropic.py`, add a helper near the top of the file (right after `inv_sigmoid`):
+
+```python
+def _serialize_spec(spec):
+    """Serialize one refractive-index spec to a checkpoint-safe value.
+
+    Material → its lowercase name (str); scalar → complex; 3-tuple → tuple of
+    the above (anisotropic; not used by the isotropic solver but supported for
+    symmetry).
+    """
+    from .material import Material
+
+    if isinstance(spec, Material):
+        return spec.name
+    if isinstance(spec, tuple):
+        return tuple(_serialize_spec(s) for s in spec)
+    if isinstance(spec, (int, float, complex)):
+        return complex(spec)
+    raise TypeError(f"Cannot serialize spec of type {type(spec).__name__}")
+
+
+def _deserialize_spec(value, device):
+    """Inverse of _serialize_spec — rewraps strings as Material(name)."""
+    from .material import Material
+
+    if isinstance(value, str):
+        return Material(value, device=device)
+    if isinstance(value, tuple):
+        return tuple(_deserialize_spec(v, device) for v in value)
+    return value  # complex / float
+```
+
+Replace the body of `save_ckpt` (line 458) with:
 
 ```python
     def save_ckpt(self, save_path):
-        """Save checkpoint. Only scalar-based stacks can be checkpointed in v1."""
-        if self.refract_idx_layers is None:
-            raise NotImplementedError(
-                "save_ckpt is not supported for stacks containing Material objects. "
-                "Persist thicknesses separately and reconstruct the solver with the "
-                "same material list at load time."
-            )
-        torch.save(
-            {
-                "film_thickness": self.get_film_thickness().cpu(),
-                "batch_size": self.batch_size,
-                "num_layers": self.num_layers,
-                "n_in": self.mat_n_in,
-                "n_out": self.mat_n_out,
-                "refract_idx_layers": self.refract_idx_layers.cpu(),
-            },
-            save_path,
-        )
+        """Save thicknesses and material specs to a checkpoint.
+
+        Material objects are persisted by name; scalars are persisted by value.
+        Per-axis 3-tuples are persisted element-wise.
+        """
+        payload = {
+            "film_thickness": self.get_film_thickness().cpu(),
+            "batch_size": self.batch_size,
+            "num_layers": self.num_layers,
+            "n_in_spec":  _serialize_spec(self._n_in_spec),
+            "n_out_spec": _serialize_spec(self._n_out_spec),
+            "layer_specs": [_serialize_spec(s) for s in self._n_layer_specs],
+            # Back-compat scalar-only fields (None when material objects present)
+            "n_in":  self.mat_n_in,
+            "n_out": self.mat_n_out,
+            "refract_idx_layers": (
+                self.refract_idx_layers.cpu()
+                if self.refract_idx_layers is not None
+                else None
+            ),
+        }
+        torch.save(payload, save_path)
 ```
 
-Add a test in `tests/material/test_solver_with_materials.py`:
+Replace the body of `load_ckpt` (line 442) with:
+
+```python
+    def load_ckpt(self, ckpt_path):
+        """Load thicknesses (and spec metadata) from a checkpoint."""
+        ckpt = torch.load(ckpt_path, map_location=self.device, weights_only=False)
+        film_thickness = torch.clamp(
+            ckpt["film_thickness"], self.thickness_min, self.thickness_max
+        )
+        film_thickness_normalized = (film_thickness - self.thickness_min) / (
+            self.thickness_max - self.thickness_min
+        )
+        if self.sigmoid_param:
+            film_thickness_normalized = torch.clamp(
+                film_thickness_normalized, 1e-6, 1 - 1e-6
+            )
+            self.film_params = inv_sigmoid(film_thickness_normalized).to(self.device)
+        else:
+            self.film_params = film_thickness_normalized.to(self.device)
+
+        # If new-format spec metadata is present, restore it
+        if "layer_specs" in ckpt:
+            self._n_in_spec = _deserialize_spec(ckpt["n_in_spec"], self.device)
+            self._n_out_spec = _deserialize_spec(ckpt["n_out_spec"], self.device)
+            self._n_layer_specs = [
+                _deserialize_spec(v, self.device) for v in ckpt["layer_specs"]
+            ]
+```
+
+Add tests in `tests/material/test_solver_with_materials.py`:
 
 ```python
 class TestIsotropicCheckpoint:
-    def test_save_ckpt_raises_for_material_stack(self, tmp_path, cpu):
-        solver = IsotropicFilmSolver(
+    def test_roundtrip_material_stack(self, tmp_path, cpu):
+        path = tmp_path / "ckpt.pt"
+        solver1 = IsotropicFilmSolver(
             mat_n_in="air",
-            mat_n_out=1.52,
-            mat_n_ls=["SiO2"],
-            thickness_ls=[0.1],
+            mat_n_out="N-BK7",
+            mat_n_ls=["TiO2", "SiO2"],
+            thickness_ls=[0.06, 0.10],
             device=cpu,
         )
-        with pytest.raises(NotImplementedError, match="material"):
-            solver.save_ckpt(tmp_path / "x.pt")
+        solver1.save_ckpt(path)
+        # Reconstruct with the same material spec (load_ckpt restores thicknesses)
+        solver2 = IsotropicFilmSolver(
+            mat_n_in="air",
+            mat_n_out="N-BK7",
+            mat_n_ls=["TiO2", "SiO2"],
+            thickness_ls=[0.001, 0.001],  # placeholder, will be overwritten
+            device=cpu,
+        )
+        solver2.load_ckpt(path)
+        torch.testing.assert_close(
+            solver1.get_film_thickness(), solver2.get_film_thickness()
+        )
+        # The deserialized layer specs should be Material objects with the right names
+        from difftmm.material import Material
+        assert isinstance(solver2._n_layer_specs[0], Material)
+        assert solver2._n_layer_specs[0].name == "tio2"
+
+    def test_roundtrip_scalar_stack(self, tmp_path, cpu):
+        path = tmp_path / "ckpt.pt"
+        solver = IsotropicFilmSolver(
+            mat_n_in=1.0,
+            mat_n_out=1.52,
+            mat_n_ls=[2.10, 1.46, 2.10],
+            thickness_ls=[0.08, 0.12, 0.08],
+            device=cpu,
+        )
+        solver.save_ckpt(path)
+        solver.load_ckpt(path)  # should not raise
 ```
 
 - [ ] **Step 5: Run tests**
@@ -2151,30 +2244,103 @@ Replace `simulate` body (line 627). Insert the resolution block after the wvln/t
         return ts, tp, rs, rp
 ```
 
-- [ ] **Step 4: Update `save_ckpt` to fail clearly for material-bearing stacks**
+- [ ] **Step 4: Make `save_ckpt` / `load_ckpt` persist material names (incl. 3-tuples)**
 
-In `difftmm/film_solver_anisotropic.py`, replace the body of `save_ckpt` (line 593):
+Add the same helpers at the top of `difftmm/film_solver_anisotropic.py` (after `inv_sigmoid`):
+
+```python
+def _serialize_spec(spec):
+    """Serialize one refractive-index spec to a checkpoint-safe value."""
+    from .material import Material
+
+    if isinstance(spec, Material):
+        return spec.name
+    if isinstance(spec, tuple):
+        return tuple(_serialize_spec(s) for s in spec)
+    if isinstance(spec, (int, float, complex)):
+        return complex(spec)
+    raise TypeError(f"Cannot serialize spec of type {type(spec).__name__}")
+
+
+def _deserialize_spec(value, device):
+    """Inverse of _serialize_spec — rewraps strings as Material(name)."""
+    from .material import Material
+
+    if isinstance(value, str):
+        return Material(value, device=device)
+    if isinstance(value, tuple):
+        return tuple(_deserialize_spec(v, device) for v in value)
+    return value
+```
+
+Replace `save_ckpt` (line 593):
 
 ```python
     def save_ckpt(self, save_path):
-        """Save checkpoint. Only scalar-based stacks can be checkpointed in v1."""
-        if self.refract_idx_layers is None:
-            raise NotImplementedError(
-                "save_ckpt is not supported for stacks containing Material objects. "
-                "Persist thicknesses separately and reconstruct the solver with the "
-                "same material list at load time."
-            )
-        torch.save(
-            {
-                "film_thickness": self.get_film_thickness().cpu(),
-                "batch_size": self.batch_size,
-                "num_layers": self.num_layers,
-                "n_in": self.mat_n_in,
-                "n_out": self.mat_n_out,
-                "refract_idx_layers": self.refract_idx_layers.cpu(),
-            },
-            save_path,
+        """Save thicknesses and material specs to a checkpoint."""
+        payload = {
+            "film_thickness": self.get_film_thickness().cpu(),
+            "batch_size": self.batch_size,
+            "num_layers": self.num_layers,
+            "n_in_spec":  _serialize_spec(self._n_in_spec),
+            "n_out_spec": _serialize_spec(self._n_out_spec),
+            "layer_specs": [_serialize_spec(s) for s in self._n_layer_specs],
+            "n_in":  self.mat_n_in,
+            "n_out": self.mat_n_out,
+            "refract_idx_layers": (
+                self.refract_idx_layers.cpu()
+                if self.refract_idx_layers is not None
+                else None
+            ),
+        }
+        torch.save(payload, save_path)
+```
+
+Replace `load_ckpt` (line 575) — same structure as the isotropic counterpart:
+
+```python
+    def load_ckpt(self, ckpt_path):
+        """Load thicknesses (and spec metadata) from a checkpoint."""
+        ckpt = torch.load(ckpt_path, map_location=self.device, weights_only=False)
+        film_thickness = torch.clamp(
+            ckpt["film_thickness"], self.thickness_min, self.thickness_max
         )
+        film_thickness_normalized = (film_thickness - self.thickness_min) / (
+            self.thickness_max - self.thickness_min
+        )
+        if self.sigmoid_param:
+            film_thickness_normalized = torch.clamp(
+                film_thickness_normalized, 1e-6, 1 - 1e-6
+            )
+            self.film_params = inv_sigmoid(film_thickness_normalized).to(self.device)
+        else:
+            self.film_params = film_thickness_normalized.to(self.device)
+
+        if "layer_specs" in ckpt:
+            self._n_in_spec = _deserialize_spec(ckpt["n_in_spec"], self.device)
+            self._n_out_spec = _deserialize_spec(ckpt["n_out_spec"], self.device)
+            self._n_layer_specs = [
+                _deserialize_spec(v, self.device) for v in ckpt["layer_specs"]
+            ]
+```
+
+Add a test for anisotropic 3-tuple checkpoint roundtrip in `tests/material/test_anisotropic_materials.py`:
+
+```python
+def test_anisotropic_3tuple_checkpoint_roundtrip(tmp_path):
+    cpu = torch.device("cpu")
+    path = tmp_path / "ckpt.pt"
+    solver = FilmSolver(
+        mat_n_in="air", mat_n_out=1.52,
+        mat_n_ls=[("SiO2", "TiO2", "SiO2"), (2.4, 2.4, 1.5)],
+        thickness_ls=[0.1, 0.06], device=cpu,
+    )
+    solver.save_ckpt(path)
+    ckpt = torch.load(path, weights_only=False)
+    # Material 3-tuple should serialize to a (str, str, str) tuple
+    assert ckpt["layer_specs"][0] == ("sio2", "tio2", "sio2")
+    # Scalar 3-tuple should serialize to a (complex, complex, complex) tuple
+    assert all(isinstance(v, complex) for v in ckpt["layer_specs"][1])
 ```
 
 - [ ] **Step 5: Run all solver tests**

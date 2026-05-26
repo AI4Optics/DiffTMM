@@ -46,7 +46,6 @@ Issue #3 explicitly requests a `RefractiveIndexTable` (lookup) and `SellmeierMat
 - Inline `"n/V"` Cauchy syntax (DeepLens has this; we drop it).
 - `optimizable` dispersion mode (learnable nd, V) — used for lens material discovery; out of scope for thin-film v1.
 - Cubic / PCHIP interpolation — v1 is linear only.
-- Persisting `Material`-based solvers to checkpoints — only scalar stacks round-trip through `save_ckpt`/`load_ckpt`.
 
 ## Decisions
 
@@ -296,8 +295,26 @@ The change is mostly removing two `unsqueeze` operations inside the TMM core and
 
 ### Checkpoint compatibility
 
-- For **scalar-only** stacks, `save_ckpt` / `load_ckpt` continue to use the derived `self.refract_idx_layers` tensor — byte-level back-compat with existing checkpoints is preserved.
-- For **Material-bearing** stacks, `save_ckpt` raises a `NotImplementedError` with a clear message: persist thicknesses separately and reconstruct the solver with the same material list at load time. This v1 limitation is documented in the docstring and notebook. A future v2 could serialize material names too.
+`save_ckpt` persists the refractive-index spec by **value for scalars and by name for `Material` objects**. Per-axis tuples are saved as 3-tuples. This means a checkpoint round-trips through `save_ckpt` / `load_ckpt` for *any* mix of scalars, strings, and `Material` objects.
+
+Checkpoint dict format:
+
+```python
+{
+    "film_thickness": tensor,
+    "batch_size": int,
+    "num_layers": int,
+    "n_in_spec":  complex | str,                                   # name for Material, value for scalar
+    "n_out_spec": complex | str,
+    "layer_specs": list[complex | str | tuple[complex|str, ...×3]],
+    # Back-compat-only fields (still emitted when all specs are scalar):
+    "n_in":  float | None,
+    "n_out": float | None,
+    "refract_idx_layers": tensor | None,
+}
+```
+
+`load_ckpt` restores thicknesses (existing behavior) **and** reconstructs the spec attributes from `layer_specs` / `n_in_spec` / `n_out_spec` (rewrapping strings as `Material(name)`). For checkpoints saved before this feature shipped, the old keys (`n_in`, `n_out`, `refract_idx_layers`) are still read as a fallback.
 
 ## Backward compatibility
 
