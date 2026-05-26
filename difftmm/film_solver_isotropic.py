@@ -357,6 +357,91 @@ def create_jones_matrix_isotropic(n_layers_1d, d_1d, wv_1d, n_in, n_out, theta_1
     return ts_out, tp_out, rs_out, rp_out
 
 
+def coh_stack_power_RT_isotropic(
+    n_layers_1d,
+    d_1d,
+    wv_1d,
+    n_in,
+    n_out,
+    theta_1d,
+):
+    """Power-domain (Rs, Rp, Ts, Tp) for a coherent isotropic stack.
+
+    Thin wrapper around ``create_jones_matrix_isotropic`` that converts
+    complex amplitudes to real power coefficients. Used as a building block
+    for the incoherent TMM solver, where each coherent stack contributes its
+    forward/backward (R, T) to the intensity transfer matrix.
+
+    Layer convention: layers are ordered from the incident medium (n_in) to
+    the exit medium (n_out), i.e. the same physical order used by
+    ``tmm_numpy.coh_tmm``.  Internally, layers are reversed before being
+    passed to ``create_jones_matrix_isotropic``, which stores them in the
+    reverse physical order due to its characteristic-matrix accumulation
+    convention.
+
+    Args:
+        n_layers_1d: refractive index of each interior layer in physical order
+            (n_in-side first), shape (batch, n_layer). Complex.
+        d_1d: thickness of each interior layer in um, same physical ordering
+            as n_layers_1d, shape (batch, n_layer). Real.
+        wv_1d: wavelengths in um, shape (batch, n_wls). Real.
+        n_in: scalar incident refractive index (top medium).
+        n_out: scalar exit refractive index (bottom medium).
+        theta_1d: incident angles in radians, shape (batch, n_angles). Real, in [0, pi/2].
+
+    Returns:
+        Rs, Rp, Ts, Tp: real tensors, each shape (batch, n_wls, n_angles), in [0, 1].
+    """
+    # ``create_jones_matrix_isotropic`` accumulates the characteristic matrix
+    # as M[n-1] @ ... @ M[0], so layer 0 of n_layers_1d is adjacent to n_out
+    # (exit medium).  To present layers in the standard physical order
+    # (n_in-adjacent first), we flip along the layer axis before the call.
+    n_layers_rev = torch.flip(n_layers_1d, dims=[1])
+    d_rev = torch.flip(d_1d, dims=[1])
+
+    ts, tp, rs, rp = create_jones_matrix_isotropic(
+        n_layers_rev, d_rev, wv_1d, n_in, n_out, theta_1d
+    )
+
+    # Reflectance is |r|^2 for both polarizations.
+    Rs = (rs.real ** 2 + rs.imag ** 2)
+    Rp = (rp.real ** 2 + rp.imag ** 2)
+
+    # Transmittance: intensity correction depends on the effective index used
+    # in the characteristic matrix.
+    #
+    # _compute_isotropic_tmm builds the s-pol matrix with n_eff = n * cos(theta)
+    # and the p-pol matrix with n_eff = n / cos(theta).
+    # The corresponding power transmittance formulae are:
+    #
+    #   s-pol: T = |t|^2 * (n_out * cos_th_out) / (n_in * cos_th_in)
+    #   p-pol: T = |t|^2 * (n_out / cos_th_out) / (n_in / cos_th_in)
+    #
+    # These are consistent with T_from_t in tmm_numpy.tmm_core when using
+    # the same sign convention and layer-reversal applied above.
+    device = n_layers_1d.device
+    dtype = torch.complex64
+
+    n_in_t = torch.tensor(n_in, dtype=dtype, device=device)
+    n_out_t = torch.tensor(n_out, dtype=dtype, device=device)
+    cos_th_in = torch.cos(theta_1d.to(dtype)).unsqueeze(1)  # (batch, 1, angles)
+    sin_th_in = torch.sin(theta_1d.to(dtype)).unsqueeze(1)
+    sin_th_out = n_in_t * sin_th_in / n_out_t
+    cos_th_out = torch.sqrt(1 - sin_th_out ** 2)
+
+    # s-pol: ratio of (n * cos_theta) quantities.
+    num_s = (n_out_t * cos_th_out).real   # n_out * cos(th_out)
+    den_s = (n_in_t * cos_th_in).real    # n_in  * cos(th_in)
+    Ts = (ts.real ** 2 + ts.imag ** 2) * (num_s / den_s)
+
+    # p-pol: ratio of (n / cos_theta) quantities.
+    num_p = (n_out_t / cos_th_out).real   # n_out / cos(th_out)
+    den_p = (n_in_t / cos_th_in).real    # n_in  / cos(th_in)
+    Tp = (tp.real ** 2 + tp.imag ** 2) * (num_p / den_p)
+
+    return Rs, Rp, Ts, Tp
+
+
 # ===========================================
 # Isotropic Film Solver Class
 # ===========================================
