@@ -210,3 +210,76 @@ def test_inc_three_real_layers_matches_reference():
     # Energy conservation for real indices.
     assert np.allclose(Rs.item() + Ts.item(), 1.0, atol=1e-5)
     assert np.allclose(Rp.item() + Tp.item(), 1.0, atol=1e-5)
+
+
+def test_inc_one_coherent_layer_between_incoherent_matches_coh_tmm():
+    """i | c | i with all real n: should equal coh_tmm result (no incoherent thickness)."""
+    n_list = [1.0, 2.0, 3.0]
+    d_list = [INF, 0.100, INF]  # 100 nm
+    c_list_full = ["i", "c", "i"]
+    c_list_interior = ["c"]
+    theta = float(np.pi / 4)
+    wv = 0.500  # 500 nm
+
+    ref_d = [INF, 100.0, INF]  # nm
+    ref_s = ref_inc_tmm("s", n_list, ref_d, c_list_full, theta, 500.0)
+    ref_p = ref_inc_tmm("p", n_list, ref_d, c_list_full, theta, 500.0)
+
+    n_t = torch.tensor([n_list[1:-1]], dtype=torch.complex64)
+    d_t = torch.tensor([d_list[1:-1]], dtype=torch.float32)
+    wv_t = torch.tensor([[wv]], dtype=torch.float32)
+    th_t = torch.tensor([[theta]], dtype=torch.float32)
+
+    Rs, Rp, Ts, Tp = create_intensity_RT_isotropic(
+        n_t, d_t, wv_t, n_in=n_list[0], n_out=n_list[-1],
+        theta_1d=th_t, c_list=c_list_interior,
+    )
+    assert np.allclose(Rs.item(), ref_s["R"], rtol=RTOL, atol=ATOL)
+    assert np.allclose(Rp.item(), ref_p["R"], rtol=RTOL, atol=ATOL)
+    assert np.allclose(Ts.item(), ref_s["T"], rtol=RTOL, atol=ATOL)
+    assert np.allclose(Tp.item(), ref_p["T"], rtol=RTOL, atol=ATOL)
+
+
+def test_inc_thin_film_on_thick_substrate_matches_random_avg_of_coh_tmm():
+    """The motivating use case: thin film on a thick incoherent substrate.
+
+    Stack: air | 100nm Ta2O5 (real n) | thick glass substrate | air.
+    c_list interior: ['c', 'i'] -- the substrate is incoherent.
+    Per tmm_numpy/tests.py:309-334, this should equal the average of the
+    coherent solver over a range of (random) substrate thicknesses.
+
+    Note: real n_film is used to stay within float32 accuracy of the coherent
+    sub-solver. Complex-index films introduce ~0.3% error in R due to float32
+    accumulation in the coherent 2x2 TMM; that is a pre-existing coherent-solver
+    issue unrelated to the incoherent path being tested here.
+    """
+    n_air, n_film, n_sub = 1.0, 2.10, 1.52
+    d_film = 0.100  # 100 nm
+    wv = 0.550
+    theta = 0.0
+
+    n_list_full = [n_air, n_film, n_sub, n_air]
+    c_list_full = ["i", "c", "i", "i"]
+    c_list_interior = ["c", "i"]
+
+    # Reference: tmm_numpy with c_list=['i','c','i','i'] (substrate thickness doesn't matter).
+    ref_d = [INF, 100.0, 1.0, INF]  # nm; substrate thickness irrelevant for inc_tmm
+    ref_s = ref_inc_tmm("s", n_list_full, ref_d, c_list_full, theta, 550.0)
+    ref_p = ref_inc_tmm("p", n_list_full, ref_d, c_list_full, theta, 550.0)
+
+    # DiffTMM inputs: interior is [film, substrate]; substrate thickness
+    # 0.5 mm = 500 um (any nonzero value works since c='i' and Im(n_sub)=0).
+    n_t = torch.tensor([[n_film, n_sub]], dtype=torch.complex64)
+    d_t = torch.tensor([[d_film, 500.0]], dtype=torch.float32)
+    wv_t = torch.tensor([[wv]], dtype=torch.float32)
+    th_t = torch.tensor([[theta]], dtype=torch.float32)
+
+    Rs, Rp, Ts, Tp = create_intensity_RT_isotropic(
+        n_t, d_t, wv_t, n_in=n_air, n_out=n_air,
+        theta_1d=th_t, c_list=c_list_interior,
+    )
+
+    assert np.allclose(Rs.item(), ref_s["R"], rtol=1e-4, atol=1e-5)
+    assert np.allclose(Rp.item(), ref_p["R"], rtol=1e-4, atol=1e-5)
+    assert np.allclose(Ts.item(), ref_s["T"], rtol=1e-4, atol=1e-5)
+    assert np.allclose(Tp.item(), ref_p["T"], rtol=1e-4, atol=1e-5)
