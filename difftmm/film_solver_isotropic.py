@@ -8,6 +8,7 @@ Copyright (c) 2026, Xinge Yang, Qingyuan Fan, Zhaocheng Liu.
 """
 
 import os
+from typing import Dict, List, Optional, Sequence
 
 import torch
 
@@ -632,4 +633,102 @@ class IsotropicFilmSolver:
     def __call__(self, theta, wvln):
         """Forward pass using simulate."""
         return self.simulate(theta, wvln)
+
+
+# ===========================================
+# Incoherent / partly-incoherent TMM
+# ===========================================
+# Differentiable implementation of partly-incoherent TMM that lets users mark
+# individual layers as coherent ('c') or incoherent ('i'). Reuses the
+# coherent 2x2 solver above for each coherent stack, then propagates
+# intensities between incoherent layers via real 2x2 transfer matrices.
+#
+# Algorithm reference: tmm_numpy/tmm_core.py::inc_tmm (Steven Byrnes, MIT).
+# Physics reference:   https://arxiv.org/abs/1603.02720 (S. Byrnes, 2016).
+
+
+# =========================
+# Layer grouping
+# =========================
+def group_layers_by_coherence(c_list: Sequence[str]) -> Dict[str, object]:
+    """Group a layer-coherence list into coherent stacks and incoherent layers.
+
+    A "stack" is a maximal run of consecutive coherent layers, bracketed on
+    each side by an incoherent layer (which is required to be present because
+    the first and last layers are semi-infinite and must be 'i').
+
+    Args:
+        c_list: Per-layer coherence flags. Each entry is 'i' (incoherent) or
+            'c' (coherent). First and last entries must be 'i' because those
+            layers are semi-infinite.
+
+    Returns:
+        Dict with keys:
+            - num_inc_layers (int): number of incoherent layers.
+            - num_stacks (int): number of coherent stacks.
+            - inc_alllayer_indices (List[int]): for each incoherent layer i,
+              its index in the original layer list.
+            - stack_alllayer_indices (List[List[int]]): for each stack s,
+              the original indices of layers in [bracketing_inc, coh_layers..., bracketing_inc].
+            - stack_after_inc (List[Optional[int]]): for each incoherent layer i,
+              the stack-index of the stack immediately after it, or None if the
+              next layer is also incoherent (or there is no next layer).
+            - inc_after_stack (List[int]): for each stack s, the incoherent-layer
+              index that immediately precedes the stack.
+
+    Raises:
+        ValueError: if the first or last entry is not 'i', or any entry is
+            neither 'i' nor 'c'.
+    """
+    if len(c_list) < 2 or c_list[0] != "i" or c_list[-1] != "i":
+        raise ValueError("c_list must start and end with 'i' (semi-infinite layers).")
+    for code in c_list:
+        if code not in ("i", "c"):
+            raise ValueError("c_list entries must be 'i' or 'c'.")
+
+    inc_alllayer_indices: List[int] = []
+    stack_alllayer_indices: List[List[int]] = []
+    stack_after_inc: List[Optional[int]] = []
+    inc_after_stack: List[int] = []
+
+    inc_index = -1  # incremented when we visit an 'i' layer
+    in_stack = False
+    current_stack: List[int] = []
+
+    for layer_idx, code in enumerate(c_list):
+        if code == "i":
+            inc_index += 1
+            inc_alllayer_indices.append(layer_idx)
+            if in_stack:
+                # Close out the stack with this incoherent layer as its right bracket.
+                current_stack.append(layer_idx)
+                stack_alllayer_indices.append(current_stack)
+                # Whoever opened this stack was the previous incoherent layer,
+                # which is at incoherent index (inc_index - 1).
+                inc_after_stack.append(inc_index - 1)
+                current_stack = []
+                in_stack = False
+                # This 'i' has no stack following it *yet*; will be patched if the next 'c' opens one.
+                stack_after_inc.append(None)
+            else:
+                stack_after_inc.append(None)
+        else:  # 'c'
+            if not in_stack:
+                # Open a stack: left bracket is the previous incoherent layer.
+                in_stack = True
+                current_stack = [inc_alllayer_indices[-1], layer_idx]
+                # The most recent incoherent layer is followed by a stack whose
+                # index will be len(stack_alllayer_indices) once the stack closes.
+                stack_after_inc[-1] = len(stack_alllayer_indices)
+            else:
+                current_stack.append(layer_idx)
+
+    return {
+        "num_inc_layers": len(inc_alllayer_indices),
+        "num_stacks": len(stack_alllayer_indices),
+        "inc_alllayer_indices": inc_alllayer_indices,
+        "stack_alllayer_indices": stack_alllayer_indices,
+        "stack_after_inc": stack_after_inc,
+        "inc_after_stack": inc_after_stack,
+    }
 

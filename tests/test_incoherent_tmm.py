@@ -91,3 +91,56 @@ def test_coh_stack_power_RT_asymmetric_and_energy_conservation():
     # Lossless: energy conservation must hold to float32 precision.
     assert np.allclose(Rs.item() + Ts.item(), 1.0, atol=1e-5)
     assert np.allclose(Rp.item() + Tp.item(), 1.0, atol=1e-5)
+
+
+from difftmm.film_solver_isotropic import group_layers_by_coherence  # noqa: E402
+
+
+def test_group_layers_all_incoherent():
+    """All-incoherent stack: no coherent groups, each layer is its own incoherent unit."""
+    groups = group_layers_by_coherence(["i", "i", "i"])
+    assert groups["num_inc_layers"] == 3
+    assert groups["num_stacks"] == 0
+    assert groups["stack_alllayer_indices"] == []
+    assert groups["inc_alllayer_indices"] == [0, 1, 2]
+    assert groups["stack_after_inc"] == [None, None, None]
+    # inc_after_stack is one entry per stack
+    assert groups["inc_after_stack"] == []
+
+
+def test_group_layers_single_coherent_stack_inside():
+    """i | c c | i — one stack of two coherent layers."""
+    groups = group_layers_by_coherence(["i", "c", "c", "i"])
+    assert groups["num_inc_layers"] == 2
+    assert groups["num_stacks"] == 1
+    # The stack spans alllayer indices 1, 2 plus its incoherent bookends (0 and 3).
+    assert groups["stack_alllayer_indices"] == [[0, 1, 2, 3]]
+    assert groups["inc_alllayer_indices"] == [0, 3]
+    # Incoherent layer 0 is followed by stack 0; incoherent layer 1 is followed by no stack.
+    assert groups["stack_after_inc"] == [0, None]
+    # Stack 0 comes after incoherent layer 0.
+    assert groups["inc_after_stack"] == [0]
+
+
+def test_group_layers_multiple_stacks():
+    """i | c | i | c c | i — two stacks separated by an incoherent layer."""
+    groups = group_layers_by_coherence(["i", "c", "i", "c", "c", "i"])
+    assert groups["num_inc_layers"] == 3
+    assert groups["num_stacks"] == 2
+    assert groups["stack_alllayer_indices"] == [[0, 1, 2], [2, 3, 4, 5]]
+    assert groups["inc_alllayer_indices"] == [0, 2, 5]
+    assert groups["stack_after_inc"] == [0, 1, None]
+    assert groups["inc_after_stack"] == [0, 1]
+
+
+def test_group_layers_endpoints_must_be_incoherent():
+    """First and last layers are semi-infinite, must be 'i'."""
+    with pytest.raises(ValueError, match="must start and end with"):
+        group_layers_by_coherence(["c", "c", "i"])
+    with pytest.raises(ValueError, match="must start and end with"):
+        group_layers_by_coherence(["i", "c", "c"])
+
+
+def test_group_layers_rejects_unknown_codes():
+    with pytest.raises(ValueError, match="entries must be"):
+        group_layers_by_coherence(["i", "x", "i"])
