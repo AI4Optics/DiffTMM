@@ -391,11 +391,21 @@ def coh_stack_power_RT_isotropic(
 
     Returns:
         Rs, Rp, Ts, Tp: real tensors, each shape (batch, n_wls, n_angles), in [0, 1].
+
+    Note:
+        This helper is public-API: it is exposed via ``difftmm.__init__`` in
+        Task 9. Other modules in this package use it as a building block for
+        the incoherent TMM solver, but external users may also call it
+        directly when they need power coefficients without phase.
     """
-    # ``create_jones_matrix_isotropic`` accumulates the characteristic matrix
-    # as M[n-1] @ ... @ M[0], so layer 0 of n_layers_1d is adjacent to n_out
-    # (exit medium).  To present layers in the standard physical order
-    # (n_in-adjacent first), we flip along the layer axis before the call.
+    # Layer convention: callers pass layers in physical order (n_in-side first),
+    # matching the convention used by tmm_numpy.coh_tmm. However,
+    # create_jones_matrix_isotropic empirically interprets its n_layers_1d
+    # argument as ordered from the n_out-side first -- verified by direct
+    # comparison with tmm_numpy.coh_tmm in test_coh_stack_power_RT_matches_tmm_numpy.
+    # We therefore flip along the layer axis before delegating. If the upstream
+    # convention is ever clarified or changed, update this flip and the test
+    # will tell us immediately.
     n_layers_rev = torch.flip(n_layers_1d, dims=[1])
     d_rev = torch.flip(d_1d, dims=[1])
 
@@ -407,18 +417,21 @@ def coh_stack_power_RT_isotropic(
     Rs = (rs.real ** 2 + rs.imag ** 2)
     Rp = (rp.real ** 2 + rp.imag ** 2)
 
-    # Transmittance: intensity correction depends on the effective index used
-    # in the characteristic matrix.
-    #
-    # _compute_isotropic_tmm builds the s-pol matrix with n_eff = n * cos(theta)
-    # and the p-pol matrix with n_eff = n / cos(theta).
-    # The corresponding power transmittance formulae are:
-    #
-    #   s-pol: T = |t|^2 * (n_out * cos_th_out) / (n_in * cos_th_in)
-    #   p-pol: T = |t|^2 * (n_out / cos_th_out) / (n_in / cos_th_in)
-    #
-    # These are consistent with T_from_t in tmm_numpy.tmm_core when using
-    # the same sign convention and layer-reversal applied above.
+    # Transmittance: |t|^2 must be scaled by an intensity-correction factor that
+    # depends on how the amplitudes ts/tp are normalized inside
+    # _compute_isotropic_tmm. That solver builds the characteristic matrix using
+    # two *different* effective indices:
+    #     n_eff_s = n * cos(theta)   for s-pol
+    #     n_eff_p = n / cos(theta)   for p-pol
+    # So ts/tp are normalized to those effective indices, and the power-correction
+    # is the ratio of effective indices -- NOT the |E|^2-based ratio
+    #     (n_out * conj(cos)) / (n_in * conj(cos))
+    # used by tmm_numpy.T_from_t. Concretely:
+    #     s-pol: T = |t|^2 * Re(n_out * cos_th_out) / Re(n_in * cos_th_in)
+    #     p-pol: T = |t|^2 * Re(n_out / cos_th_out) / Re(n_in / cos_th_in)
+    # Energy conservation (R+T = 1 for real lossless stacks) and agreement with
+    # tmm_numpy.coh_tmm to ~1e-7 (see test_coh_stack_power_RT_matches_tmm_numpy)
+    # confirm this is the consistent power formula for this amplitude normalization.
     device = n_layers_1d.device
     dtype = torch.complex64
 

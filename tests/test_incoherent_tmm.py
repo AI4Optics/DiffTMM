@@ -63,3 +63,31 @@ def test_coh_stack_power_RT_matches_tmm_numpy():
     assert np.allclose(Rp.item(), ref_p["R"], rtol=RTOL, atol=ATOL)
     assert np.allclose(Ts.item(), ref_s["T"], rtol=RTOL, atol=ATOL)
     assert np.allclose(Tp.item(), ref_p["T"], rtol=RTOL, atol=ATOL)
+
+
+def test_coh_stack_power_RT_asymmetric_and_energy_conservation():
+    """Asymmetric stack must still match tmm_numpy, and R + T = 1 for lossless layers."""
+    n_in, n_out = 1.0, 1.52
+    # Asymmetric: distinct indices in different positions.
+    n_layers = [2.50, 1.46, 1.80]
+    d_layers = [0.120, 0.080, 0.150]
+    wv = 0.633
+    theta = 0.9  # ~51.5 deg, comfortably away from normal incidence
+
+    n_t, d_t, wv_t, th_t = _wrap_inputs(n_layers, d_layers, wv, theta)
+    Rs, Rp, Ts, Tp = coh_stack_power_RT_isotropic(
+        n_t, d_t, wv_t, n_in, n_out, th_t
+    )
+
+    ref_n = [n_in] + n_layers + [n_out]
+    ref_d = [np.inf] + d_layers + [np.inf]
+    ref_s = coh_tmm("s", ref_n, ref_d, theta, wv)
+    ref_p = coh_tmm("p", ref_n, ref_d, theta, wv)
+
+    assert np.allclose(Rs.item(), ref_s["R"], rtol=RTOL, atol=ATOL)
+    assert np.allclose(Rp.item(), ref_p["R"], rtol=RTOL, atol=ATOL)
+    assert np.allclose(Ts.item(), ref_s["T"], rtol=RTOL, atol=ATOL)
+    assert np.allclose(Tp.item(), ref_p["T"], rtol=RTOL, atol=ATOL)
+    # Lossless: energy conservation must hold to float32 precision.
+    assert np.allclose(Rs.item() + Ts.item(), 1.0, atol=1e-5)
+    assert np.allclose(Rp.item() + Tp.item(), 1.0, atol=1e-5)
