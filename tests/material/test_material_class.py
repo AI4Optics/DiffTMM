@@ -123,3 +123,29 @@ class TestInterpNK:
         # Same table => identical output
         wvln = torch.tensor([0.55])
         torch.testing.assert_close(m1.ior(wvln), m2.ior(wvln))
+
+
+class TestMaterialDeviceAndGrad:
+    def test_to_device_moves_cached_tensors(self):
+        mat = Material("SiO2")
+        out_cpu = mat.ior(torch.tensor([0.55])).device
+        assert out_cpu.type == "cpu"
+        # to() should be a no-op for cpu->cpu
+        mat.to("cpu")
+        assert mat._ref_wvlns.device.type == "cpu"
+
+    def test_autograd_through_sellmeier(self):
+        mat = Material("N-BK7")
+        wvln = torch.tensor([0.55], requires_grad=True)
+        n = mat.ior(wvln)
+        n.real.sum().backward()
+        assert wvln.grad is not None
+        assert torch.isfinite(wvln.grad).all()
+
+    def test_autograd_through_interp(self):
+        mat = Material("SiO2")
+        wvln = torch.tensor([0.55], requires_grad=True)
+        n = mat.ior(wvln)
+        n.real.sum().backward()
+        assert wvln.grad is not None
+        assert torch.isfinite(wvln.grad).all()

@@ -224,6 +224,20 @@ class Material:
 
         raise NotImplementedError(f"Material {self.name!r} not implemented.")
 
+    def to(self, device: torch.device | str) -> "Material":
+        """Move cached interpolation tensors to the given device.
+
+        Returns self for chaining.
+        """
+        device = torch.device(device) if not isinstance(device, torch.device) else device
+        self.device = device
+        if hasattr(self, "_ref_wvlns") and self._ref_wvlns is not None:
+            self._ref_wvlns = self._ref_wvlns.to(device)
+            self._ref_n = self._ref_n.to(device)
+            if self._ref_k is not None:
+                self._ref_k = self._ref_k.to(device)
+        return self
+
     def ior(self, wvln: torch.Tensor) -> torch.Tensor:
         """Compute the complex refractive index at given wavelengths.
 
