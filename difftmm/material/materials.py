@@ -80,7 +80,10 @@ _CUSTOM_DATA: dict = _read_json_catalog(
 _SELLMEIER_TABLE: dict = _CUSTOM_DATA.get("SELLMEIER_TABLE", {})
 _MATERIAL_TABLE: dict = _CUSTOM_DATA.get("MATERIAL_TABLE", {})
 
-MATERIAL_data: dict = {**_AGF_DATA, **{k: {"source": "json"} for k in _SELLMEIER_TABLE}}  # Public — exported via package __init__
+MATERIAL_data: dict = {
+    **_AGF_DATA,
+    **{k: {"source": "json"} for k in _SELLMEIER_TABLE if k not in _AGF_DATA},
+}  # Public — exported via package __init__
 
 
 class Material:

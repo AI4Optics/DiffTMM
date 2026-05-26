@@ -66,3 +66,13 @@ class TestJSONSellmeier:
         wvln = torch.tensor([0.5876])
         n = mat.ior(wvln).real.item()
         assert abs(n - 1.5168) < 1e-3
+
+    def test_s_til6_json_only_material(self):
+        """s-til6 exists only in JSON SELLMEIER_TABLE, not in any AGF catalog."""
+        mat = Material("s-til6")
+        assert mat.dispersion == "sellmeier"
+        assert abs(mat.n - 1.5317) < 1e-4
+        assert abs(mat.V - 48.84) < 1e-2
+        wvln = torch.tensor([0.5876])
+        n = mat.ior(wvln).real.item()
+        assert abs(n - 1.5317) < 1e-3
