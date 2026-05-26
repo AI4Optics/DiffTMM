@@ -732,3 +732,45 @@ def group_layers_by_coherence(c_list: Sequence[str]) -> Dict[str, object]:
         "inc_after_stack": inc_after_stack,
     }
 
+
+# =========================
+# Single-interface Fresnel power R, T
+# =========================
+def interface_power_RT(n_i, n_f, cos_i, cos_f):
+    """Fresnel power reflectance/transmittance at a single interface.
+
+    All inputs are complex tensors broadcastable to a common shape.
+    Returns (Rs, Rp, Ts, Tp) as real tensors of that shape.
+
+    Math:
+        r_s = (n_i cos_i - n_f cos_f) / (n_i cos_i + n_f cos_f)
+        r_p = (n_f cos_i - n_i cos_f) / (n_f cos_i + n_i cos_f)
+        t_s = 2 n_i cos_i / (n_i cos_i + n_f cos_f)
+        t_p = 2 n_i cos_i / (n_f cos_i + n_i cos_f)
+        R = |r|^2
+        T_s = |t_s|^2 * Re(n_f cos_f) / Re(n_i cos_i)
+        T_p = |t_p|^2 * Re(n_f conj(cos_f)) / Re(n_i conj(cos_i))
+    """
+    n_i_cos_i = n_i * cos_i
+    n_f_cos_f = n_f * cos_f
+    n_f_cos_i = n_f * cos_i
+    n_i_cos_f = n_i * cos_f
+
+    r_s = (n_i_cos_i - n_f_cos_f) / (n_i_cos_i + n_f_cos_f)
+    r_p = (n_f_cos_i - n_i_cos_f) / (n_f_cos_i + n_i_cos_f)
+    t_s = 2 * n_i_cos_i / (n_i_cos_i + n_f_cos_f)
+    t_p = 2 * n_i_cos_i / (n_f_cos_i + n_i_cos_f)
+
+    Rs = r_s.real ** 2 + r_s.imag ** 2
+    Rp = r_p.real ** 2 + r_p.imag ** 2
+
+    ts_sq = t_s.real ** 2 + t_s.imag ** 2
+    tp_sq = t_p.real ** 2 + t_p.imag ** 2
+
+    Ts = ts_sq * (n_f_cos_f.real / n_i_cos_i.real)
+    Tp = tp_sq * (
+        (n_f * torch.conj(cos_f)).real / (n_i * torch.conj(cos_i)).real
+    )
+
+    return Rs, Rp, Ts, Tp
+

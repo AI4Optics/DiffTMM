@@ -144,3 +144,31 @@ def test_group_layers_endpoints_must_be_incoherent():
 def test_group_layers_rejects_unknown_codes():
     with pytest.raises(ValueError, match="entries must be"):
         group_layers_by_coherence(["i", "x", "i"])
+
+
+from difftmm.film_solver_isotropic import interface_power_RT  # noqa: E402
+from tmm_numpy.tmm_core import interface_R as ref_interface_R  # noqa: E402
+from tmm_numpy.tmm_core import interface_T as ref_interface_T  # noqa: E402
+from tmm_numpy.tmm_core import snell as ref_snell  # noqa: E402
+
+
+def test_interface_power_RT_real_indices():
+    """Single interface R/T must match Fresnel and obey R + T = 1 for real indices."""
+    n_i, n_f = 1.0, 1.52
+    theta_i = 0.4
+    theta_f = ref_snell(n_i, n_f, theta_i)  # complex but imag ~ 0
+
+    n_i_t = torch.tensor(n_i, dtype=torch.complex64)
+    n_f_t = torch.tensor(n_f, dtype=torch.complex64)
+    cos_i = torch.tensor(np.cos(theta_i), dtype=torch.complex64)
+    cos_f = torch.tensor(np.cos(theta_f), dtype=torch.complex64)
+
+    Rs, Rp, Ts, Tp = interface_power_RT(n_i_t, n_f_t, cos_i, cos_f)
+
+    assert np.allclose(Rs.item(), ref_interface_R("s", n_i, n_f, theta_i, theta_f), atol=ATOL)
+    assert np.allclose(Rp.item(), ref_interface_R("p", n_i, n_f, theta_i, theta_f), atol=ATOL)
+    assert np.allclose(Ts.item(), ref_interface_T("s", n_i, n_f, theta_i, theta_f), atol=ATOL)
+    assert np.allclose(Tp.item(), ref_interface_T("p", n_i, n_f, theta_i, theta_f), atol=ATOL)
+    # Energy conservation for real n, real theta.
+    assert np.allclose(Rs.item() + Ts.item(), 1.0, atol=ATOL)
+    assert np.allclose(Rp.item() + Tp.item(), 1.0, atol=ATOL)
