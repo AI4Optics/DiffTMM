@@ -207,11 +207,17 @@ def create_jones_matrix_isotropic(n_layers_1d, d_1d, wv_1d, n_in, n_out, theta_1
       Internally converts to equivalent forward problem with swapped media and reversed layers.
 
     Args:
-        n_layers_1d: refractive index of each layer, shape (batchsize, n_layer). Complex.
+        n_layers_1d: refractive index of each layer.
+                     Shape (batchsize, n_layer) — wavelength-independent, OR
+                     shape (batchsize, n_wls, n_layer) — dispersive per wavelength. Complex.
         d_1d: thicknesses of all layers, shape (batchsize, n_layer). Real or Complex.
         wv_1d: wavelengths of simulations, shape (batchsize, n_wls). Real.
-        n_in: incident media refractive index (top medium). Scalar.
-        n_out: transmit media refractive index (bottom medium). Scalar.
+        n_in: incident media refractive index (top medium).
+              Scalar (Python float/complex), OR tensor of shape (batchsize, n_wls)
+              for per-wavelength dispersive incident medium.
+        n_out: transmit media refractive index (bottom medium).
+               Scalar (Python float/complex), OR tensor of shape (batchsize, n_wls)
+               for per-wavelength dispersive exit medium.
         theta_1d: incident angles, shape (batchsize, n_angles). Real.
                   Range [0, pi]. Angles > pi/2 represent reverse propagation.
 
@@ -227,8 +233,20 @@ def create_jones_matrix_isotropic(n_layers_1d, d_1d, wv_1d, n_in, n_out, theta_1
     num_angles = theta_1d.shape[1]
     num_layer = d_1d.shape[1]
 
-    n_in_t = torch.tensor(n_in, dtype=dtype, device=device)
-    n_out_t = torch.tensor(n_out, dtype=dtype, device=device)
+    # Normalize n_in / n_out to (batch, num_wv, 1, 1) complex tensors so they
+    # broadcast correctly with the (batch, num_wv, num_angles, num_layer) tensors
+    # used inside _compute_isotropic_tmm.
+    def _to_per_wvln(x):
+        if torch.is_tensor(x) and x.dim() == 2:
+            # Already (batch, num_wv)
+            return x.to(dtype=dtype, device=device).unsqueeze(-1).unsqueeze(-1)
+        if torch.is_tensor(x) and x.dim() == 0:
+            x = x.item()
+        # Scalar (Python or 0-d tensor that we just unwrapped)
+        return torch.tensor(complex(x), dtype=dtype, device=device).view(1, 1, 1, 1)
+
+    n_in_t = _to_per_wvln(n_in)
+    n_out_t = _to_per_wvln(n_out)
 
     # Identify forward (theta <= pi/2) and reverse (theta > pi/2) angles
     pi_half = torch.pi / 2
@@ -237,12 +255,25 @@ def create_jones_matrix_isotropic(n_layers_1d, d_1d, wv_1d, n_in, n_out, theta_1
     # Fast path: if n_in == n_out (symmetric media), we can use a simpler approach
     # For symmetric media with symmetric layer stack, |r(theta)| = |r(pi-theta)|
     # We compute forward angles only and map results for reverse angles
-    if abs(n_in - n_out) < 1e-10:
+    # Fast path only when both media are scalar and equal
+    is_scalar_pair = (
+        not torch.is_tensor(n_in) and not torch.is_tensor(n_out)
+        and abs(n_in - n_out) < 1e-10
+    )
+    if is_scalar_pair:
         # Map all angles to [0, pi/2] range
         theta_mapped = torch.where(is_reverse, torch.pi - theta_1d, theta_1d)
 
         # Expand dimensions (combined for fewer operations)
-        n_layers = n_layers_1d.unsqueeze(1).unsqueeze(2).to(dtype)
+        # Normalize n_layers to (batch, num_wv, 1, num_layer) complex
+        if n_layers_1d.dim() == 2:
+            # (batch, num_layer) — wavelength-independent
+            n_layers = n_layers_1d.unsqueeze(1).unsqueeze(2).to(dtype=dtype, device=device)
+        elif n_layers_1d.dim() == 3:
+            # (batch, num_wv, num_layer) — wavelength-dependent
+            n_layers = n_layers_1d.unsqueeze(2).to(dtype=dtype, device=device)
+        else:
+            raise ValueError(f"n_layers_1d must be 2-D or 3-D, got shape {n_layers_1d.shape}")
         d = d_1d.unsqueeze(1).unsqueeze(2).to(dtype)
         wv = wv_1d.unsqueeze(2).unsqueeze(3).to(dtype)
         theta = theta_mapped.unsqueeze(1).unsqueeze(3).to(dtype)
@@ -285,7 +316,15 @@ def create_jones_matrix_isotropic(n_layers_1d, d_1d, wv_1d, n_in, n_out, theta_1
 
         # For simplicity, process all angles but only use results for forward ones
         # Expand dimensions for broadcasting
-        n_layers = n_layers_1d.unsqueeze(1).unsqueeze(2).to(dtype)  # (batch, 1, 1, layer)
+        # Normalize n_layers to (batch, num_wv, 1, num_layer) complex
+        if n_layers_1d.dim() == 2:
+            # (batch, num_layer) — wavelength-independent
+            n_layers = n_layers_1d.unsqueeze(1).unsqueeze(2).to(dtype=dtype, device=device)
+        elif n_layers_1d.dim() == 3:
+            # (batch, num_wv, num_layer) — wavelength-dependent
+            n_layers = n_layers_1d.unsqueeze(2).to(dtype=dtype, device=device)
+        else:
+            raise ValueError(f"n_layers_1d must be 2-D or 3-D, got shape {n_layers_1d.shape}")
         d = d_1d.unsqueeze(1).unsqueeze(2).to(dtype)
         theta = theta_1d.unsqueeze(1).unsqueeze(3).to(dtype)  # (batch, 1, angles, 1)
 
@@ -322,11 +361,20 @@ def create_jones_matrix_isotropic(n_layers_1d, d_1d, wv_1d, n_in, n_out, theta_1
         theta_rev = torch.pi - theta_1d  # (batch, angles)
 
         # Reverse layer order
-        n_layers_rev = torch.flip(n_layers_1d, dims=[1])
+        # Flip the layer axis (last dim works for both 2-D and 3-D)
+        n_layers_rev = torch.flip(n_layers_1d, dims=[-1])
         d_rev = torch.flip(d_1d, dims=[1])
 
         # Expand dimensions
-        n_layers_rev_exp = n_layers_rev.unsqueeze(1).unsqueeze(2).to(dtype)
+        # Normalize n_layers to (batch, num_wv, 1, num_layer) complex
+        if n_layers_rev.dim() == 2:
+            # (batch, num_layer) — wavelength-independent
+            n_layers_rev_exp = n_layers_rev.unsqueeze(1).unsqueeze(2).to(dtype=dtype, device=device)
+        elif n_layers_rev.dim() == 3:
+            # (batch, num_wv, num_layer) — wavelength-dependent
+            n_layers_rev_exp = n_layers_rev.unsqueeze(2).to(dtype=dtype, device=device)
+        else:
+            raise ValueError(f"n_layers_1d must be 2-D or 3-D, got shape {n_layers_1d.shape}")
         d_rev_exp = d_rev.unsqueeze(1).unsqueeze(2).to(dtype)
         theta_rev_exp = theta_rev.unsqueeze(1).unsqueeze(3).to(dtype)
 
