@@ -291,3 +291,55 @@ class Material:
             t = torch.tensor([float(wvln)], device=self.device)
             return complex(self.ior(t).item())
         return self.ior(wvln)
+
+
+def resolve_indices(
+    spec,
+    wvln: torch.Tensor,
+    device: "torch.device | str" = "cpu",
+    *,
+    axis: "int | None" = None,
+) -> torch.Tensor:
+    """Resolve a refractive-index spec at given wavelengths.
+
+    Args:
+        spec: one of:
+            - float, complex, 0-d torch.Tensor (wavelength-independent).
+            - str: looked up via Material(spec).
+            - Material: `.ior(wvln)` is called.
+            - 3-tuple of any of the above (anisotropic; `axis` selects element).
+        wvln: real 1-D tensor of wavelengths in μm.
+        device: target torch device.
+        axis: For 3-tuple specs, which axis (0, 1, 2). Ignored otherwise.
+
+    Returns:
+        torch.complex64 tensor of shape `(n_wvlns,)`.
+    """
+    if isinstance(spec, tuple):
+        if axis is None or not (0 <= axis < 3):
+            raise ValueError(f"axis must be 0, 1, or 2 for tuple spec, got {axis!r}")
+        if len(spec) != 3:
+            raise ValueError(f"anisotropic spec must be a 3-tuple, got len {len(spec)}")
+        return resolve_indices(spec[axis], wvln, device)
+
+    if isinstance(spec, Material):
+        return spec.to(device).ior(wvln)
+
+    if isinstance(spec, str):
+        return Material(spec, device=device).ior(wvln)
+
+    # Scalar paths
+    if isinstance(spec, (int, float, complex)):
+        val = complex(spec)
+        return torch.full(wvln.shape, val, dtype=torch.complex64, device=wvln.device)
+
+    if torch.is_tensor(spec):
+        if spec.dim() == 0:
+            val = complex(spec.item())
+            return torch.full(wvln.shape, val, dtype=torch.complex64, device=wvln.device)
+        # Per-wvln tensor — must already match shape
+        if spec.shape != wvln.shape:
+            raise ValueError(f"tensor spec shape {spec.shape} != wvln shape {wvln.shape}")
+        return spec.to(torch.complex64).to(wvln.device)
+
+    raise TypeError(f"Unsupported refractive-index spec type: {type(spec).__name__}")
