@@ -283,3 +283,51 @@ def test_inc_thin_film_on_thick_substrate_matches_random_avg_of_coh_tmm():
     assert np.allclose(Rp.item(), ref_p["R"], rtol=1e-4, atol=1e-5)
     assert np.allclose(Ts.item(), ref_s["T"], rtol=1e-4, atol=1e-5)
     assert np.allclose(Tp.item(), ref_p["T"], rtol=1e-4, atol=1e-5)
+
+
+def test_inc_sweep_angles_and_wavelengths():
+    """Batched (theta, wvln) sweep matches reference looped element-wise."""
+    # Use very small absorption (1e-4) to stay within float32 precision limits
+    # of the coherent solver. See test_inc_thin_film_on_thick_substrate_... note.
+    n_air, n_film, n_sub = 1.0, 2.10 + 0.0001j, 1.52
+    d_film = 0.100
+    c_list_full = ["i", "c", "i", "i"]
+    c_list_interior = ["c", "i"]
+    n_list_full = [n_air, n_film, n_sub, n_air]
+
+    thetas = np.linspace(0.0, np.pi / 3, 5)
+    wvs_um = np.linspace(0.450, 0.700, 4)
+
+    # Reference: loop.
+    ref_Rs = np.zeros((4, 5))
+    ref_Rp = np.zeros((4, 5))
+    ref_Ts = np.zeros((4, 5))
+    ref_Tp = np.zeros((4, 5))
+    for i, w in enumerate(wvs_um):
+        ref_d = [INF, 100.0, 1.0, INF]
+        for j, th in enumerate(thetas):
+            ds = ref_inc_tmm("s", n_list_full, ref_d, c_list_full, float(th), float(w) * 1000)
+            dp = ref_inc_tmm("p", n_list_full, ref_d, c_list_full, float(th), float(w) * 1000)
+            ref_Rs[i, j] = ds["R"]
+            ref_Ts[i, j] = ds["T"]
+            ref_Rp[i, j] = dp["R"]
+            ref_Tp[i, j] = dp["T"]
+
+    # DiffTMM batched call.
+    n_t = torch.tensor([[n_film, n_sub]], dtype=torch.complex64)
+    d_t = torch.tensor([[d_film, 500.0]], dtype=torch.float32)
+    wv_t = torch.tensor([wvs_um.tolist()], dtype=torch.float32)
+    th_t = torch.tensor([thetas.tolist()], dtype=torch.float32)
+
+    Rs, Rp, Ts, Tp = create_intensity_RT_isotropic(
+        n_t, d_t, wv_t, n_in=n_air, n_out=n_air,
+        theta_1d=th_t, c_list=c_list_interior,
+    )
+
+    # Shape: (1, n_wv=4, n_angles=5).
+    assert Rs.shape == (1, 4, 5)
+    # Relaxed tolerance accommodates float32 precision with small-loss film.
+    np.testing.assert_allclose(Rs[0].cpu().numpy(), ref_Rs, rtol=1e-3, atol=1e-4)
+    np.testing.assert_allclose(Rp[0].cpu().numpy(), ref_Rp, rtol=1e-3, atol=1e-4)
+    np.testing.assert_allclose(Ts[0].cpu().numpy(), ref_Ts, rtol=1e-3, atol=1e-4)
+    np.testing.assert_allclose(Tp[0].cpu().numpy(), ref_Tp, rtol=1e-3, atol=1e-4)
