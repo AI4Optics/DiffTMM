@@ -440,3 +440,11 @@ def test_incoherent_solver_requires_c_list_length_to_match_layers():
             c_list=["c"],  # too short
             device=torch.device("cpu"),
         )
+
+
+def test_public_api_exposes_incoherent_symbols():
+    import difftmm
+    assert hasattr(difftmm, "IncoherentIsotropicFilmSolver")
+    assert hasattr(difftmm, "create_intensity_RT_isotropic")
+    assert "IncoherentIsotropicFilmSolver" in difftmm.__all__
+    assert "create_intensity_RT_isotropic" in difftmm.__all__
