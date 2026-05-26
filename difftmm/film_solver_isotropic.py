@@ -774,3 +774,290 @@ def interface_power_RT(n_i, n_f, cos_i, cos_f):
 
     return Rs, Rp, Ts, Tp
 
+
+# =========================
+# Main incoherent TMM
+# =========================
+def create_intensity_RT_isotropic(
+    n_layers_1d,
+    d_1d,
+    wv_1d,
+    n_in,
+    n_out,
+    theta_1d,
+    c_list,
+):
+    """Partly-incoherent intensity TMM for isotropic multi-layer films.
+
+    Each interior layer is marked coherent ('c') or incoherent ('i') via
+    ``c_list``. The two semi-infinite media (n_in, n_out) are always
+    incoherent, so ``c_list`` describes only the *interior* layers and the
+    full coherence sequence is ``['i'] + c_list + ['i']``.
+
+    The algorithm:
+      1. Group consecutive coherent layers into stacks.
+      2. For each stack, run the existing coherent 2x2 solver in both
+         directions to get (R_fwd, T_fwd, R_bwd, T_bwd).
+      3. Compute single-pass absorption P_i for each interior incoherent
+         layer.
+      4. Build real 2x2 intensity transfer matrices L_i and multiply.
+      5. Read off total R and T.
+
+    Args:
+        n_layers_1d: refractive indices of interior layers, shape (batch, n_layer). Complex.
+        d_1d: thicknesses of interior layers in um, shape (batch, n_layer). Real.
+        wv_1d: wavelengths in um, shape (batch, n_wls). Real.
+        n_in: scalar incident refractive index (top medium).
+        n_out: scalar exit refractive index (bottom medium).
+        theta_1d: incident angles in radians, shape (batch, n_angles). Real, in [0, pi/2].
+        c_list: list of 'c'/'i' codes, length n_layer (interior layers only).
+
+    Returns:
+        Rs, Rp, Ts, Tp: real tensors, each shape (batch, n_wls, n_angles), in [0, 1].
+    """
+    if len(c_list) != n_layers_1d.shape[1]:
+        raise ValueError(
+            f"c_list length {len(c_list)} does not match interior-layer count "
+            f"{n_layers_1d.shape[1]}."
+        )
+
+    device = n_layers_1d.device
+    real_dtype = torch.float32
+    complex_dtype = torch.complex64
+
+    batchsize = n_layers_1d.shape[0]
+    num_wv = wv_1d.shape[1]
+    num_angles = theta_1d.shape[1]
+
+    # Full coherence sequence including semi-infinite endpoints.
+    full_c_list = ["i"] + list(c_list) + ["i"]
+    groups = group_layers_by_coherence(full_c_list)
+
+    num_inc = groups["num_inc_layers"]
+    inc_alllayer_indices = groups["inc_alllayer_indices"]
+    stack_alllayer_indices = groups["stack_alllayer_indices"]
+    stack_after_inc = groups["stack_after_inc"]
+
+    # Build full per-layer index tensors with the endpoints in place.
+    n_in_col = torch.full(
+        (batchsize, 1), n_in, dtype=complex_dtype, device=device
+    )
+    n_out_col = torch.full(
+        (batchsize, 1), n_out, dtype=complex_dtype, device=device
+    )
+    n_full = torch.cat([n_in_col, n_layers_1d.to(complex_dtype), n_out_col], dim=1)
+
+    d_in_col = torch.full((batchsize, 1), float("inf"), dtype=real_dtype, device=device)
+    d_out_col = torch.full((batchsize, 1), float("inf"), dtype=real_dtype, device=device)
+    d_full = torch.cat([d_in_col, d_1d.to(real_dtype), d_out_col], dim=1)
+
+    # Snell's law to get cos(theta) in each layer.
+    sin_th_in = torch.sin(theta_1d).to(complex_dtype)  # (batch, angles)
+    n_full_b = n_full.unsqueeze(-1)           # (batch, n_full, 1)
+    n_in_b = n_in_col.unsqueeze(-1)           # (batch, 1, 1)
+    sin_th_in_b = sin_th_in.unsqueeze(1)      # (batch, 1, angles)
+    sin_th_layers = n_in_b * sin_th_in_b / n_full_b   # (batch, n_full, angles)
+    cos_th_layers = torch.sqrt(1 - sin_th_layers ** 2)  # complex
+
+    # Single-pass absorption P_i for each *interior* incoherent layer.
+    # wv_b shape: (batch, 1, n_wv, 1) for broadcasting over n_int_inc and angles.
+    wv_b = wv_1d.unsqueeze(-1).unsqueeze(1)  # (batch, 1, n_wv, 1)
+    interior_inc_alllayer = [
+        inc_alllayer_indices[i] for i in range(1, num_inc - 1)
+    ]
+    if len(interior_inc_alllayer) > 0:
+        idx = torch.tensor(interior_inc_alllayer, dtype=torch.long, device=device)
+        n_inc_interior = n_full.index_select(1, idx)          # (batch, n_int_inc)
+        d_inc_interior = d_full.index_select(1, idx)          # (batch, n_int_inc)
+        cos_inc_interior = cos_th_layers.index_select(1, idx) # (batch, n_int_inc, angles)
+        n_inc_b = n_inc_interior.unsqueeze(-1).unsqueeze(-1)  # (batch, n_int_inc, 1, 1)
+        d_inc_b = d_inc_interior.unsqueeze(-1).unsqueeze(-1)  # (batch, n_int_inc, 1, 1)
+        cos_inc_b = cos_inc_interior.unsqueeze(2)             # (batch, n_int_inc, 1, angles)
+        imag_part = (n_inc_b * cos_inc_b).imag
+        P_interior = torch.exp(-4 * torch.pi * d_inc_b.real * imag_part / wv_b.real)
+        # shape: (batch, n_int_inc, n_wv, angles)
+        P_interior = torch.clamp(P_interior, min=1e-30)
+    else:
+        P_interior = None
+
+    Rs_total, Rp_total, Ts_total, Tp_total = _inc_total_RT_for_all_pols(
+        n_full=n_full,
+        d_full=d_full,
+        cos_th_layers=cos_th_layers,
+        wv_1d=wv_1d,
+        theta_1d=theta_1d,
+        n_in=n_in,
+        n_out=n_out,
+        groups=groups,
+        P_interior=P_interior,
+    )
+
+    return Rs_total, Rp_total, Ts_total, Tp_total
+
+
+def _inc_total_RT_for_all_pols(
+    n_full,
+    d_full,
+    cos_th_layers,
+    wv_1d,
+    theta_1d,
+    n_in,
+    n_out,
+    groups,
+    P_interior,
+):
+    """Inner driver: assemble L matrices and return (Rs, Rp, Ts, Tp).
+
+    See create_intensity_RT_isotropic for argument meanings.
+    """
+    device = n_full.device
+    complex_dtype = torch.complex64
+    real_dtype = torch.float32
+
+    batchsize = n_full.shape[0]
+    num_wv = wv_1d.shape[1]
+    num_angles = theta_1d.shape[1]
+
+    num_inc = groups["num_inc_layers"]
+    num_stacks = groups["num_stacks"]
+    inc_alllayer_indices = groups["inc_alllayer_indices"]
+    stack_alllayer_indices = groups["stack_alllayer_indices"]
+    stack_after_inc = groups["stack_after_inc"]
+
+    # Precompute power R/T for every coherent stack, forward and backward.
+    stack_RT = []
+    for s_idx in range(num_stacks):
+        layer_idxs = stack_alllayer_indices[s_idx]  # [left_inc, c..., right_inc]
+        left_inc_alllayer = layer_idxs[0]
+        right_inc_alllayer = layer_idxs[-1]
+        coh_alllayer = layer_idxs[1:-1]
+
+        n_left = n_full[:, left_inc_alllayer]   # (batch,) complex
+        n_right = n_full[:, right_inc_alllayer]
+        n_left_scalar = complex(n_left[0].item())
+        n_right_scalar = complex(n_right[0].item())
+
+        idx_coh = torch.tensor(coh_alllayer, dtype=torch.long, device=device)
+        n_coh = n_full.index_select(1, idx_coh)            # (batch, n_coh)
+        d_coh = d_full.index_select(1, idx_coh).to(real_dtype)
+
+        Rs_fwd, Rp_fwd, Ts_fwd, Tp_fwd = coh_stack_power_RT_isotropic(
+            n_coh, d_coh, wv_1d, n_left_scalar, n_right_scalar, theta_1d
+        )
+
+        # Backward: reverse layer order and swap media.
+        n_coh_rev = torch.flip(n_coh, dims=[1])
+        d_coh_rev = torch.flip(d_coh, dims=[1])
+        sin_th_in_local = torch.sin(theta_1d).to(complex_dtype)
+        sin_th_right = (n_in * sin_th_in_local) / n_right_scalar
+        theta_right = torch.arcsin(torch.clamp(sin_th_right.real, -1.0, 1.0)).to(real_dtype)
+        Rs_bwd, Rp_bwd, Ts_bwd, Tp_bwd = coh_stack_power_RT_isotropic(
+            n_coh_rev, d_coh_rev, wv_1d, n_right_scalar, n_left_scalar, theta_right
+        )
+        stack_RT.append({
+            "Rs_fwd": Rs_fwd, "Rp_fwd": Rp_fwd, "Ts_fwd": Ts_fwd, "Tp_fwd": Tp_fwd,
+            "Rs_bwd": Rs_bwd, "Rp_bwd": Rp_bwd, "Ts_bwd": Ts_bwd, "Tp_bwd": Tp_bwd,
+        })
+
+    def _interface_RT(inc_i):
+        """Return (Rs_f, Rp_f, Ts_f, Tp_f, Rs_b, Rp_b, Ts_b, Tp_b) for interface inc_i -> inc_i+1.
+
+        Each is a real tensor (batch, n_wv, n_angles).
+        Tuple positions: 0=Rs_f, 1=Rp_f, 2=Ts_f, 3=Tp_f, 4=Rs_b, 5=Rp_b, 6=Ts_b, 7=Tp_b.
+        """
+        nxt_stack = stack_after_inc[inc_i]
+        if nxt_stack is None:
+            # Direct bare interface between consecutive incoherent layers.
+            a_idx = inc_alllayer_indices[inc_i]
+            b_idx = inc_alllayer_indices[inc_i + 1]
+            n_a = n_full[:, a_idx].unsqueeze(-1).unsqueeze(-1)  # (batch, 1, 1)
+            n_b = n_full[:, b_idx].unsqueeze(-1).unsqueeze(-1)
+            cos_a = cos_th_layers[:, a_idx].unsqueeze(1)  # (batch, 1, angles)
+            cos_b = cos_th_layers[:, b_idx].unsqueeze(1)
+            Rs_f, Rp_f, Ts_f, Tp_f = interface_power_RT(n_a, n_b, cos_a, cos_b)
+            Rs_b, Rp_b, Ts_b, Tp_b = interface_power_RT(n_b, n_a, cos_b, cos_a)
+            # Expand wavelength dimension: (batch, 1, angles) -> (batch, n_wv, angles)
+            Rs_f = Rs_f.expand(-1, num_wv, -1)
+            Rp_f = Rp_f.expand(-1, num_wv, -1)
+            Ts_f = Ts_f.expand(-1, num_wv, -1)
+            Tp_f = Tp_f.expand(-1, num_wv, -1)
+            Rs_b = Rs_b.expand(-1, num_wv, -1)
+            Rp_b = Rp_b.expand(-1, num_wv, -1)
+            Ts_b = Ts_b.expand(-1, num_wv, -1)
+            Tp_b = Tp_b.expand(-1, num_wv, -1)
+            return (Rs_f, Rp_f, Ts_f, Tp_f, Rs_b, Rp_b, Ts_b, Tp_b)
+        else:
+            d = stack_RT[nxt_stack]
+            return (
+                d["Rs_fwd"], d["Rp_fwd"], d["Ts_fwd"], d["Tp_fwd"],
+                d["Rs_bwd"], d["Rp_bwd"], d["Ts_bwd"], d["Tp_bwd"],
+            )
+
+    def _step_L(Rfwd, Tfwd, Rbwd, Tbwd):
+        """Build 2x2 intensity L-matrix factor (without the leading diag(1/P, P)).
+
+        Returns real tensor of shape (batch, n_wv, n_angles, 2, 2).
+        """
+        eps = 1e-30
+        Tfwd_safe = torch.clamp(Tfwd, min=eps)
+        det = Tbwd * Tfwd - Rbwd * Rfwd
+        row0 = torch.stack([torch.ones_like(Rfwd), -Rbwd], dim=-1)
+        row1 = torch.stack([Rfwd, det], dim=-1)
+        M = torch.stack([row0, row1], dim=-2) / Tfwd_safe.unsqueeze(-1).unsqueeze(-1)
+        return M
+
+    def _accumulate(pol):
+        """Run the L-matrix accumulation for one polarization. Returns (R, T) tensors."""
+        # sel indices into _interface_RT tuple:
+        #   (Rs_f, Rp_f, Ts_f, Tp_f, Rs_b, Rp_b, Ts_b, Tp_b)
+        #   s-pol: Rfwd=0, Tfwd=2, Rbwd=4, Tbwd=6
+        #   p-pol: Rfwd=1, Tfwd=3, Rbwd=5, Tbwd=7
+        if pol == "s":
+            sel = (0, 2, 4, 6)
+        else:
+            sel = (1, 3, 5, 7)
+
+        i0 = _interface_RT(0)
+        Rfwd = i0[sel[0]]
+        Tfwd = i0[sel[1]]
+        Rbwd = i0[sel[2]]
+        Tbwd = i0[sel[3]]
+        Ltilde = _step_L(Rfwd, Tfwd, Rbwd, Tbwd)
+
+        for i in range(1, num_inc - 1):
+            ii = _interface_RT(i)
+            Rfwd = ii[sel[0]]
+            Tfwd = ii[sel[1]]
+            Rbwd = ii[sel[2]]
+            Tbwd = ii[sel[3]]
+            M = _step_L(Rfwd, Tfwd, Rbwd, Tbwd)
+
+            # Apply P factor for interior incoherent layer i.
+            # P_interior index: interior inc layers are indices 1..(num_inc-2),
+            # stored in P_interior[:, 0..n_int_inc-1], so layer i maps to column i-1.
+            P_i = P_interior[:, i - 1]  # (batch, n_wv, angles)
+            P_safe = torch.clamp(P_i, min=1e-30)
+            inv_P = 1.0 / P_safe
+
+            # Left-multiply M by diag(1/P, P): out-of-place to preserve autograd.
+            M_scaled_00 = M[..., 0, 0] * inv_P
+            M_scaled_01 = M[..., 0, 1] * inv_P
+            M_scaled_10 = M[..., 1, 0] * P_safe
+            M_scaled_11 = M[..., 1, 1] * P_safe
+            row0 = torch.stack([M_scaled_00, M_scaled_01], dim=-1)
+            row1 = torch.stack([M_scaled_10, M_scaled_11], dim=-1)
+            M_scaled = torch.stack([row0, row1], dim=-2)
+
+            Ltilde = torch.matmul(Ltilde, M_scaled)
+
+        a = Ltilde[..., 0, 0]
+        c = Ltilde[..., 1, 0]
+        a_safe = torch.where(a.abs() < 1e-30, torch.full_like(a, 1e-30), a)
+        T_total = 1.0 / a_safe
+        R_total = c / a_safe
+        return R_total, T_total
+
+    Rs_t, Ts_t = _accumulate("s")
+    Rp_t, Tp_t = _accumulate("p")
+    return Rs_t, Rp_t, Ts_t, Tp_t
+

@@ -172,3 +172,41 @@ def test_interface_power_RT_real_indices():
     # Energy conservation for real n, real theta.
     assert np.allclose(Rs.item() + Ts.item(), 1.0, atol=ATOL)
     assert np.allclose(Rp.item() + Tp.item(), 1.0, atol=ATOL)
+
+
+from difftmm.film_solver_isotropic import create_intensity_RT_isotropic  # noqa: E402
+from tmm_numpy.tmm_core import inc_tmm as ref_inc_tmm  # noqa: E402
+
+INF = float("inf")
+
+
+def test_inc_three_real_layers_matches_reference():
+    """3-incoherent-layer real-index stack: matches tmm_numpy.inc_tmm closed form."""
+    n_list = [1.0, 2.0, 3.0]
+    d_list_inc = [INF, 0.567, INF]  # in um (567 nm)
+    theta = float(np.pi / 3)
+    wv = 0.400  # 400 nm in um
+
+    # Reference values from tmm_numpy
+    ref_d_list = [INF, 567.0, INF]  # nm
+    ref_c_list = ["i", "i", "i"]
+    ref_s = ref_inc_tmm("s", n_list, ref_d_list, ref_c_list, theta, 400.0)
+    ref_p = ref_inc_tmm("p", n_list, ref_d_list, ref_c_list, theta, 400.0)
+
+    n_t = torch.tensor([n_list[1:-1]], dtype=torch.complex64)
+    d_t = torch.tensor([d_list_inc[1:-1]], dtype=torch.float32)
+    wv_t = torch.tensor([[wv]], dtype=torch.float32)
+    th_t = torch.tensor([[theta]], dtype=torch.float32)
+
+    Rs, Rp, Ts, Tp = create_intensity_RT_isotropic(
+        n_t, d_t, wv_t, n_in=n_list[0], n_out=n_list[-1], theta_1d=th_t,
+        c_list=["i"],  # interior only; the full sequence is ['i', 'i', 'i']
+    )
+
+    assert np.allclose(Rs.item(), ref_s["R"], rtol=RTOL, atol=ATOL)
+    assert np.allclose(Rp.item(), ref_p["R"], rtol=RTOL, atol=ATOL)
+    assert np.allclose(Ts.item(), ref_s["T"], rtol=RTOL, atol=ATOL)
+    assert np.allclose(Tp.item(), ref_p["T"], rtol=RTOL, atol=ATOL)
+    # Energy conservation for real indices.
+    assert np.allclose(Rs.item() + Ts.item(), 1.0, atol=1e-5)
+    assert np.allclose(Rp.item() + Tp.item(), 1.0, atol=1e-5)
