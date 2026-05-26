@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 
@@ -63,8 +64,23 @@ def _load_all_agf() -> dict:
     return merged
 
 
+def _read_json_catalog(file_path: str) -> dict:
+    """Read a JSON catalog file and return its contents as a dict."""
+    if not os.path.exists(file_path):
+        return {}
+    with open(file_path, encoding="utf-8") as f:
+        return json.load(f)
+
+
 _AGF_DATA: dict = _load_all_agf()
-MATERIAL_data: dict = dict(_AGF_DATA)  # Public — exported via package __init__
+
+_CUSTOM_DATA: dict = _read_json_catalog(
+    os.path.join(_CATALOGS_DIR, "materials_data.json")
+)
+_SELLMEIER_TABLE: dict = _CUSTOM_DATA.get("SELLMEIER_TABLE", {})
+_MATERIAL_TABLE: dict = _CUSTOM_DATA.get("MATERIAL_TABLE", {})
+
+MATERIAL_data: dict = {**_AGF_DATA, **{k: {"source": "json"} for k in _SELLMEIER_TABLE}}  # Public — exported via package __init__
 
 
 class Material:
@@ -106,6 +122,15 @@ class Material:
             self.l3 = entry["l3"]
             self.n = entry["nd"]
             self.V = entry["vd"]
+            return
+
+        if self.name in _SELLMEIER_TABLE:
+            coeffs = _SELLMEIER_TABLE[self.name]
+            self.dispersion = "sellmeier"
+            self.k1, self.l1, self.k2, self.l2, self.k3, self.l3 = coeffs
+            nv = _MATERIAL_TABLE.get(self.name, [None, None])
+            self.n = nv[0] if nv[0] is not None else 0.0
+            self.V = nv[1] if nv[1] is not None else 1e38
             return
 
         raise NotImplementedError(f"Material {self.name!r} not implemented.")

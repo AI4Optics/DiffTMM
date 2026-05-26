@@ -56,3 +56,13 @@ class TestAGFLoading:
         # so it should raise.
         with pytest.raises(NotImplementedError):
             Material("PMMA")  # depends: must not match an AGF Sellmeier entry
+
+
+class TestJSONSellmeier:
+    def test_bk7_lowercase_from_json(self):
+        # 'bk7' is in materials_data.json SELLMEIER_TABLE
+        mat = Material("bk7")
+        assert mat.dispersion == "sellmeier"
+        wvln = torch.tensor([0.5876])
+        n = mat.ior(wvln).real.item()
+        assert abs(n - 1.5168) < 1e-3
