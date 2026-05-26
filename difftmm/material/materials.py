@@ -79,11 +79,56 @@ _CUSTOM_DATA: dict = _read_json_catalog(
 )
 _SELLMEIER_TABLE: dict = _CUSTOM_DATA.get("SELLMEIER_TABLE", {})
 _MATERIAL_TABLE: dict = _CUSTOM_DATA.get("MATERIAL_TABLE", {})
+_INTERP_TABLE: dict = _CUSTOM_DATA.get("INTERP_TABLE", {})
 
 MATERIAL_data: dict = {
     **_AGF_DATA,
     **{k: {"source": "json"} for k in _SELLMEIER_TABLE if k not in _AGF_DATA},
 }  # Public — exported via package __init__
+
+
+def _linear_interp_complex(
+    wvln: torch.Tensor,
+    ref_wvlns: torch.Tensor,
+    ref_n: torch.Tensor,
+    ref_k: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Differentiable linear interpolation of (n, k) into complex output.
+
+    Args:
+        wvln: Query wavelengths (μm), shape (...,).
+        ref_wvlns: Sorted table wavelengths, shape (M,).
+        ref_n: Real refractive index at each table point, shape (M,).
+        ref_k: Extinction coefficient at each table point, shape (M,), or None.
+
+    Returns:
+        torch.complex64 tensor with the same shape as `wvln`.
+    """
+    num_pts = ref_wvlns.numel()
+    i = torch.searchsorted(ref_wvlns, wvln, side="right")
+    idx_low = torch.clamp(i - 1, 0, num_pts - 1)
+    idx_high = torch.clamp(i, 0, num_pts - 1)
+
+    w_low = ref_wvlns[idx_low]
+    w_high = ref_wvlns[idx_high]
+    n_low = ref_n[idx_low]
+    n_high = ref_n[idx_high]
+
+    denom = w_high - w_low
+    has_interval = denom != 0
+    safe_denom = torch.where(has_interval, denom, torch.ones_like(denom))
+    weight_high = torch.where(
+        has_interval, (wvln - w_low) / safe_denom, torch.zeros_like(wvln)
+    )
+    weight_low = 1.0 - weight_high
+    n_real = n_low * weight_low + n_high * weight_high
+    if ref_k is not None:
+        k_low = ref_k[idx_low]
+        k_high = ref_k[idx_high]
+        k_real = k_low * weight_low + k_high * weight_high
+    else:
+        k_real = torch.zeros_like(n_real)
+    return torch.complex(n_real, k_real).to(torch.complex64)
 
 
 class Material:
@@ -136,6 +181,23 @@ class Material:
             self.V = nv[1] if nv[1] is not None else 1e38
             return
 
+        if self.name in _INTERP_TABLE:
+            entry = _INTERP_TABLE[self.name]
+            self.dispersion = "interp"
+            self._ref_wvlns = torch.tensor(entry["wvlns"], dtype=torch.float32)
+            self._ref_n = torch.tensor(entry["n"], dtype=torch.float32)
+            self._ref_k = None
+            # Compute nd, V from the table for completeness
+            d_wvln = torch.tensor([0.5876])
+            F_wvln = torch.tensor([0.4861])
+            C_wvln = torch.tensor([0.6563])
+            nd = _linear_interp_complex(d_wvln, self._ref_wvlns, self._ref_n).real.item()
+            nF = _linear_interp_complex(F_wvln, self._ref_wvlns, self._ref_n).real.item()
+            nC = _linear_interp_complex(C_wvln, self._ref_wvlns, self._ref_n).real.item()
+            self.n = nd
+            self.V = (nd - 1) / (nF - nC) if nF != nC else 1e38
+            return
+
         raise NotImplementedError(f"Material {self.name!r} not implemented.")
 
     def ior(self, wvln: torch.Tensor) -> torch.Tensor:
@@ -156,4 +218,9 @@ class Material:
             )
             n = torch.sqrt(torch.clamp(n2, min=1e-30))
             return (n + 0j).to(torch.complex64)
+        if self.dispersion == "interp":
+            self._ref_wvlns = self._ref_wvlns.to(wvln.device)
+            self._ref_n = self._ref_n.to(wvln.device)
+            ref_k = self._ref_k.to(wvln.device) if self._ref_k is not None else None
+            return _linear_interp_complex(wvln, self._ref_wvlns, self._ref_n, ref_k)
         raise NotImplementedError(f"Dispersion {self.dispersion!r} not implemented.")

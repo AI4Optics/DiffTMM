@@ -76,3 +76,28 @@ class TestJSONSellmeier:
         wvln = torch.tensor([0.5876])
         n = mat.ior(wvln).real.item()
         assert abs(n - 1.5317) < 1e-3
+
+
+class TestInterpRealN:
+    def test_fused_silica_at_d_line(self):
+        # 'fused_silica' is in materials_data.json INTERP_TABLE
+        mat = Material("fused_silica")
+        assert mat.dispersion == "interp"
+        wvln = torch.tensor([0.5876])
+        n = mat.ior(wvln)
+        # At 0.5876, table values bracket; the result should be a real value ~1.46
+        assert n.dtype == torch.complex64
+        assert abs(n.real.item() - 1.4596) < 0.005
+        assert n.imag.item() == pytest.approx(0.0)
+
+    def test_interp_vector_output(self, wvln_vis):
+        mat = Material("fused_silica")
+        n = mat.ior(wvln_vis)
+        assert n.shape == wvln_vis.shape
+        assert n.dtype == torch.complex64
+
+    def test_interp_endpoints_match_table(self):
+        mat = Material("fused_silica")
+        # First table point is (0.40, 1.4701)
+        wvln = torch.tensor([0.40])
+        assert abs(mat.ior(wvln).real.item() - 1.4701) < 1e-4
