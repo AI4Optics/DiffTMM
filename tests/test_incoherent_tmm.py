@@ -331,3 +331,63 @@ def test_inc_sweep_angles_and_wavelengths():
     np.testing.assert_allclose(Rp[0].cpu().numpy(), ref_Rp, rtol=1e-3, atol=1e-4)
     np.testing.assert_allclose(Ts[0].cpu().numpy(), ref_Ts, rtol=1e-3, atol=1e-4)
     np.testing.assert_allclose(Tp[0].cpu().numpy(), ref_Tp, rtol=1e-3, atol=1e-4)
+
+
+def test_inc_autograd_flows_through_thickness():
+    """Loss = (R - target)^2 should have a non-zero gradient w.r.t. layer thickness."""
+    # Real indices to keep gradient checks within float32 precision.
+    n_air, n_film, n_sub = 1.0, 2.10, 1.52
+    c_list_interior = ["c", "i"]
+
+    n_t = torch.tensor([[n_film, n_sub]], dtype=torch.complex64)
+    d_t = torch.tensor([[0.080, 0.500]], dtype=torch.float32, requires_grad=True)
+    wv_t = torch.tensor([[0.550]], dtype=torch.float32)
+    th_t = torch.tensor([[0.0]], dtype=torch.float32)
+
+    Rs, Rp, Ts, Tp = create_intensity_RT_isotropic(
+        n_t, d_t, wv_t, n_in=n_air, n_out=n_air,
+        theta_1d=th_t, c_list=c_list_interior,
+    )
+    loss = (Rs.mean() - 0.5) ** 2
+    loss.backward()
+
+    grad = d_t.grad
+    assert grad is not None
+    # The coherent film thickness must influence R (interference). The substrate
+    # is incoherent and lossless, so its gradient should be ~0; the film's
+    # gradient must be non-zero.
+    assert abs(grad[0, 0].item()) > 1e-6, "Film thickness gradient should be non-zero"
+    assert abs(grad[0, 1].item()) < 1e-6, "Lossless incoherent substrate thickness gradient should be ~0"
+
+
+def test_inc_optimization_loop_reduces_loss():
+    """A short Adam loop on film thickness should reduce the loss."""
+    torch.manual_seed(0)
+    n_air, n_film, n_sub = 1.0, 2.10, 1.52
+    c_list_interior = ["c", "i"]
+
+    target_R = torch.tensor(0.30)
+    d_param = torch.tensor([[0.050, 0.500]], dtype=torch.float32, requires_grad=True)
+    opt = torch.optim.Adam([d_param], lr=0.01)
+
+    losses = []
+    for _ in range(50):
+        opt.zero_grad()
+        n_t = torch.tensor([[n_film, n_sub]], dtype=torch.complex64)
+        wv_t = torch.tensor([[0.550]], dtype=torch.float32)
+        th_t = torch.tensor([[0.0]], dtype=torch.float32)
+        Rs, Rp, Ts, Tp = create_intensity_RT_isotropic(
+            n_t, d_param, wv_t, n_in=n_air, n_out=n_air,
+            theta_1d=th_t, c_list=c_list_interior,
+        )
+        loss = (Rs.mean() - target_R) ** 2
+        loss.backward()
+        opt.step()
+        # Keep thicknesses positive.
+        with torch.no_grad():
+            d_param.clamp_(min=1e-4)
+        losses.append(loss.item())
+
+    assert losses[-1] < losses[0] * 0.5, (
+        f"Optimization didn't reduce loss: start={losses[0]:.4f}, end={losses[-1]:.4f}"
+    )
