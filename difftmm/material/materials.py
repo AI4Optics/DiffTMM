@@ -95,6 +95,21 @@ MATERIAL_data: dict = {
 }  # Public — exported via package __init__
 
 
+def list_materials() -> list[str]:
+    """Return all known material names from all bundled catalogs (sorted).
+
+    Returns:
+        Sorted list of lowercase material name strings.
+    """
+    names: set[str] = set()
+    names.add("air")
+    names.update(_AGF_DATA.keys())
+    names.update(_SELLMEIER_TABLE.keys())
+    names.update(_INTERP_TABLE.keys())
+    names.update(_INTERP_NK_TABLE.keys())
+    return sorted(names)
+
+
 def _linear_interp_complex(
     wvln: torch.Tensor,
     ref_wvlns: torch.Tensor,
@@ -262,3 +277,17 @@ class Material:
             ref_k = self._ref_k.to(wvln.device) if self._ref_k is not None else None
             return _linear_interp_complex(wvln, self._ref_wvlns, self._ref_n, ref_k)
         raise NotImplementedError(f"Dispersion {self.dispersion!r} not implemented.")
+
+    def refractive_index(self, wvln: "float | torch.Tensor"):
+        """Return the complex refractive index.
+
+        Args:
+            wvln: float (returns Python complex) or tensor (returns complex tensor).
+
+        Returns:
+            Python complex when wvln is a scalar, torch.complex64 tensor otherwise.
+        """
+        if isinstance(wvln, (int, float)):
+            t = torch.tensor([float(wvln)], device=self.device)
+            return complex(self.ior(t).item())
+        return self.ior(wvln)

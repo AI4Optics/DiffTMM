@@ -149,3 +149,24 @@ class TestMaterialDeviceAndGrad:
         n.real.sum().backward()
         assert wvln.grad is not None
         assert torch.isfinite(wvln.grad).all()
+
+
+class TestHelpers:
+    def test_list_materials_returns_known_names(self):
+        from difftmm.material import list_materials
+        names = list_materials()
+        assert "air" in names
+        assert "n-bk7" in names  # from AGF
+        assert "sio2" in names  # from thin_film_materials INTERP_NK_TABLE (case-folded)
+
+    def test_refractive_index_scalar_input(self):
+        mat = Material("air")
+        result = mat.refractive_index(0.55)
+        assert isinstance(result, complex)
+        assert result.real == pytest.approx(1.0)
+
+    def test_refractive_index_tensor_input(self, wvln_vis):
+        mat = Material("air")
+        result = mat.refractive_index(wvln_vis)
+        assert torch.is_tensor(result)
+        assert result.dtype == torch.complex64
