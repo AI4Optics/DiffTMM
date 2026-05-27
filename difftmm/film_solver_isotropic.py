@@ -419,9 +419,9 @@ class IsotropicFilmSolver:
 
     def __init__(
         self,
-        mat_n_in,
-        mat_n_out,
-        mat_n_ls,
+        mat_in,
+        mat_out,
+        mat_ls,
         thickness_ls=None,
         thickness_min=0.0,
         thickness_max=0.2,
@@ -433,11 +433,11 @@ class IsotropicFilmSolver:
         Initialize the isotropic film solver.
 
         Args:
-            mat_n_in: Refractive index of incident medium. May be a scalar
-                      (int/float/complex), a str material name, or a Material.
-            mat_n_out: Refractive index of exit medium. Same types as mat_n_in.
-            mat_n_ls: Refractive indices of interior layers. May be a list/tensor
-                      of scalars, str material names, and/or Material objects.
+            mat_in: Refractive index of incident medium. May be a float, complex,
+                      str material name, or Material. int is not accepted.
+            mat_out: Refractive index of exit medium. Same types as mat_in.
+            mat_ls: Refractive indices of interior layers. May be a list/tensor
+                      of float/complex scalars, str material names, and/or Material objects.
             thickness_ls: Thicknesses of interior layers in um, list or tensor of length N.
                           If None, randomly initializes thicknesses.
             thickness_min: Minimum layer thickness in um.
@@ -456,13 +456,13 @@ class IsotropicFilmSolver:
                 return Material(spec, device=device)
             return spec
 
-        self._n_in_spec = _normalize(mat_n_in)
-        self._n_out_spec = _normalize(mat_n_out)
+        self._n_in_spec = _normalize(mat_in)
+        self._n_out_spec = _normalize(mat_out)
 
-        if torch.is_tensor(mat_n_ls):
-            specs = [complex(v.item()) for v in mat_n_ls.flatten()]
+        if torch.is_tensor(mat_ls):
+            specs = [complex(v.item()) for v in mat_ls.flatten()]
         else:
-            specs = list(mat_n_ls)
+            specs = list(mat_ls)
         normalized_specs = []
         for s in specs:
             if isinstance(s, tuple):
@@ -473,17 +473,6 @@ class IsotropicFilmSolver:
             normalized_specs.append(_normalize(s))
         self._n_layer_specs = normalized_specs
         self.num_layers = len(normalized_specs)
-
-        self.mat_n_in = (
-            float(mat_n_in)
-            if isinstance(mat_n_in, (int, float)) and not isinstance(mat_n_in, bool)
-            else None
-        )
-        self.mat_n_out = (
-            float(mat_n_out)
-            if isinstance(mat_n_out, (int, float)) and not isinstance(mat_n_out, bool)
-            else None
-        )
 
         self.thickness_min = thickness_min
         self.thickness_max = thickness_max
@@ -528,11 +517,11 @@ class IsotropicFilmSolver:
         else:
             self.film_params = film_thickness_normalized.to(self.device)
 
-        if "layer_specs" in ckpt:
-            self._n_in_spec = _deserialize_spec(ckpt["n_in_spec"], self.device)
-            self._n_out_spec = _deserialize_spec(ckpt["n_out_spec"], self.device)
+        if "mat_ls" in ckpt:
+            self._n_in_spec = _deserialize_spec(ckpt["mat_in"], self.device)
+            self._n_out_spec = _deserialize_spec(ckpt["mat_out"], self.device)
             self._n_layer_specs = [
-                _deserialize_spec(v, self.device) for v in ckpt["layer_specs"]
+                _deserialize_spec(v, self.device) for v in ckpt["mat_ls"]
             ]
 
     def save_ckpt(self, save_path):
@@ -545,11 +534,9 @@ class IsotropicFilmSolver:
             "film_thickness": self.get_film_thickness().cpu(),
             "batch_size": self.batch_size,
             "num_layers": self.num_layers,
-            "n_in_spec":  _serialize_spec(self._n_in_spec),
-            "n_out_spec": _serialize_spec(self._n_out_spec),
-            "layer_specs": [_serialize_spec(s) for s in self._n_layer_specs],
-            "n_in":  self.mat_n_in,
-            "n_out": self.mat_n_out,
+            "mat_in":  _serialize_spec(self._n_in_spec),
+            "mat_out": _serialize_spec(self._n_out_spec),
+            "mat_ls":  [_serialize_spec(s) for s in self._n_layer_specs],
         }
         torch.save(payload, save_path)
 

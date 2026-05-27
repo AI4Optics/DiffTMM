@@ -1,7 +1,6 @@
 """Material support for DiffTMM — wavelength-dependent refractive indices."""
 
 from .materials import (
-    MATERIAL_data,
     Material,
     _deserialize_spec,
     _serialize_spec,
@@ -11,7 +10,6 @@ from .materials import (
 
 __all__ = [
     "Material",
-    "MATERIAL_data",
     "list_materials",
     "resolve_indices",
     "_serialize_spec",

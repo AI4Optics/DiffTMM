@@ -8,9 +8,6 @@ import re
 
 import torch
 
-
-_AIR_ALIASES = {"air", "vacuum", "occluder"}
-
 _CATALOGS_DIR = os.path.join(os.path.dirname(__file__), "catalogs")
 
 
@@ -74,13 +71,6 @@ def _read_json_catalog(file_path: str) -> dict:
 
 _AGF_DATA: dict = _load_all_agf()
 
-_CUSTOM_DATA: dict = _read_json_catalog(
-    os.path.join(_CATALOGS_DIR, "materials_data.json")
-)
-_SELLMEIER_TABLE: dict = _CUSTOM_DATA.get("SELLMEIER_TABLE", {})
-_MATERIAL_TABLE: dict = _CUSTOM_DATA.get("MATERIAL_TABLE", {})
-_INTERP_TABLE: dict = _CUSTOM_DATA.get("INTERP_TABLE", {})
-
 _THINFILM_DATA: dict = _read_json_catalog(
     os.path.join(_CATALOGS_DIR, "thin_film_materials.json")
 )
@@ -88,11 +78,6 @@ _THINFILM_DATA: dict = _read_json_catalog(
 _INTERP_NK_TABLE: dict = {
     k.lower(): v for k, v in _THINFILM_DATA.get("INTERP_NK_TABLE", {}).items()
 }
-
-MATERIAL_data: dict = {
-    **_AGF_DATA,
-    **{k: {"source": "json"} for k in _SELLMEIER_TABLE if k not in _AGF_DATA},
-}  # Public — exported via package __init__
 
 
 def list_materials() -> list[str]:
@@ -104,8 +89,6 @@ def list_materials() -> list[str]:
     names: set[str] = set()
     names.add("air")
     names.update(_AGF_DATA.keys())
-    names.update(_SELLMEIER_TABLE.keys())
-    names.update(_INTERP_TABLE.keys())
     names.update(_INTERP_NK_TABLE.keys())
     return sorted(names)
 
@@ -158,21 +141,31 @@ class Material:
     """Optical material with wavelength-dependent complex refractive index.
 
     Attributes:
-        name (str): Lowercase material name.
-        dispersion (str): 'sellmeier' | 'interp'.
+        name (str): Lowercase material name, or str(value) for constant materials.
+        dispersion (str): 'sellmeier' | 'interp' | 'constant'.
         n (float): Nominal refractive index at d-line (587 nm).
-        V (float): Abbe number (1e38 for non-dispersive 'air').
+        V (float): Abbe number (1e38 for non-dispersive materials).
     """
 
     def __init__(
         self,
-        name: str | None = None,
-        device: torch.device | str = "cpu",
+        name: "str | float | complex | None" = None,
+        device: "torch.device | str" = "cpu",
     ):
-        raw = "air" if name is None else name.strip().lower()
-        self.name = "air" if raw in _AIR_ALIASES else raw
-        self.device = torch.device(device) if not isinstance(device, torch.device) else device
-        self._load_dispersion()
+        self.device = (
+            torch.device(device) if not isinstance(device, torch.device) else device
+        )
+        if isinstance(name, (float, complex)):
+            n = complex(name)
+            self._const_n = n
+            self.name = str(name)
+            self.dispersion = "constant"
+            self.n = n.real
+            self.V = 1e38
+        else:
+            raw = "air" if name is None else name.strip().lower()
+            self.name = raw
+            self._load_dispersion()
 
     def _load_dispersion(self) -> None:
         if self.name == "air":
@@ -195,32 +188,6 @@ class Material:
             self.V = entry["vd"]
             return
 
-        if self.name in _SELLMEIER_TABLE:
-            coeffs = _SELLMEIER_TABLE[self.name]
-            self.dispersion = "sellmeier"
-            self.k1, self.l1, self.k2, self.l2, self.k3, self.l3 = coeffs
-            nv = _MATERIAL_TABLE.get(self.name, [None, None])
-            self.n = nv[0] if nv[0] is not None else 0.0
-            self.V = nv[1] if nv[1] is not None else 1e38
-            return
-
-        if self.name in _INTERP_TABLE:
-            entry = _INTERP_TABLE[self.name]
-            self.dispersion = "interp"
-            self._ref_wvlns = torch.tensor(entry["wvlns"], dtype=torch.float32)
-            self._ref_n = torch.tensor(entry["n"], dtype=torch.float32)
-            self._ref_k = None
-            # Compute nd, V from the table for completeness
-            d_wvln = torch.tensor([0.5876])
-            F_wvln = torch.tensor([0.4861])
-            C_wvln = torch.tensor([0.6563])
-            nd = _linear_interp_complex(d_wvln, self._ref_wvlns, self._ref_n).real.item()
-            nF = _linear_interp_complex(F_wvln, self._ref_wvlns, self._ref_n).real.item()
-            nC = _linear_interp_complex(C_wvln, self._ref_wvlns, self._ref_n).real.item()
-            self.n = nd
-            self.V = (nd - 1) / (nF - nC) if nF != nC else 1e38
-            return
-
         if self.name in _INTERP_NK_TABLE:
             entry = _INTERP_NK_TABLE[self.name]
             self.dispersion = "interp"
@@ -230,9 +197,15 @@ class Material:
             d_wvln = torch.tensor([0.5876])
             F_wvln = torch.tensor([0.4861])
             C_wvln = torch.tensor([0.6563])
-            nd = _linear_interp_complex(d_wvln, self._ref_wvlns, self._ref_n).real.item()
-            nF = _linear_interp_complex(F_wvln, self._ref_wvlns, self._ref_n).real.item()
-            nC = _linear_interp_complex(C_wvln, self._ref_wvlns, self._ref_n).real.item()
+            nd = _linear_interp_complex(
+                d_wvln, self._ref_wvlns, self._ref_n
+            ).real.item()
+            nF = _linear_interp_complex(
+                F_wvln, self._ref_wvlns, self._ref_n
+            ).real.item()
+            nC = _linear_interp_complex(
+                C_wvln, self._ref_wvlns, self._ref_n
+            ).real.item()
             self.n = nd
             self.V = (nd - 1) / (nF - nC) if nF != nC else 1e38
             return
@@ -244,7 +217,9 @@ class Material:
 
         Returns self for chaining.
         """
-        device = torch.device(device) if not isinstance(device, torch.device) else device
+        device = (
+            torch.device(device) if not isinstance(device, torch.device) else device
+        )
         self.device = device
         if hasattr(self, "_ref_wvlns") and self._ref_wvlns is not None:
             self._ref_wvlns = self._ref_wvlns.to(device)
@@ -256,12 +231,21 @@ class Material:
     def ior(self, wvln: torch.Tensor) -> torch.Tensor:
         """Compute the complex refractive index at given wavelengths.
 
+        The TMM solvers always require complex output — even for lossless
+        real-valued materials — because evanescent waves (beyond critical angle)
+        make cos(theta_layer) imaginary during propagation.
+
         Args:
             wvln: real tensor of wavelengths in μm.
         Returns:
             torch.complex64 tensor with the same shape as `wvln`.
         """
-        if self.dispersion == "sellmeier":
+        if self.dispersion == "constant":
+            return torch.full(
+                wvln.shape, self._const_n, dtype=torch.complex64, device=wvln.device
+            )
+
+        elif self.dispersion == "sellmeier":
             wvln2 = wvln**2
             n2 = (
                 1.0
@@ -271,11 +255,13 @@ class Material:
             )
             n = torch.sqrt(torch.clamp(n2, min=1e-30))
             return (n + 0j).to(torch.complex64)
-        if self.dispersion == "interp":
+
+        elif self.dispersion == "interp":
             self._ref_wvlns = self._ref_wvlns.to(wvln.device)
             self._ref_n = self._ref_n.to(wvln.device)
             ref_k = self._ref_k.to(wvln.device) if self._ref_k is not None else None
             return _linear_interp_complex(wvln, self._ref_wvlns, self._ref_n, ref_k)
+
         raise NotImplementedError(f"Dispersion {self.dispersion!r} not implemented.")
 
     def refractive_index(self, wvln: "float | torch.Tensor"):
@@ -301,6 +287,8 @@ def _serialize_spec(spec):
     symmetry).
     """
     if isinstance(spec, Material):
+        if spec.dispersion == "constant":
+            return spec._const_n
         return spec.name
     if isinstance(spec, tuple):
         return tuple(_serialize_spec(s) for s in spec)
@@ -361,10 +349,14 @@ def resolve_indices(
     if torch.is_tensor(spec):
         if spec.dim() == 0:
             val = complex(spec.item())
-            return torch.full(wvln.shape, val, dtype=torch.complex64, device=wvln.device)
+            return torch.full(
+                wvln.shape, val, dtype=torch.complex64, device=wvln.device
+            )
         # Per-wvln tensor — must already match shape
         if spec.shape != wvln.shape:
-            raise ValueError(f"tensor spec shape {spec.shape} != wvln shape {wvln.shape}")
+            raise ValueError(
+                f"tensor spec shape {spec.shape} != wvln shape {wvln.shape}"
+            )
         return spec.to(torch.complex64).to(wvln.device)
 
     raise TypeError(f"Unsupported refractive-index spec type: {type(spec).__name__}")

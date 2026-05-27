@@ -536,9 +536,9 @@ class FilmSolver:
 
     def __init__(
         self,
-        mat_n_in,
-        mat_n_out,
-        mat_n_ls,
+        mat_in,
+        mat_out,
+        mat_ls,
         thickness_ls=None,
         thickness_min=0.0,
         thickness_max=0.2,
@@ -565,27 +565,27 @@ class FilmSolver:
                 return tuple(_normalize_scalar_or_str(s) for s in spec)
             return _normalize_scalar_or_str(spec)
 
-        self._n_in_spec = _normalize_scalar_or_str(mat_n_in)
-        self._n_out_spec = _normalize_scalar_or_str(mat_n_out)
+        self._n_in_spec = _normalize_scalar_or_str(mat_in)
+        self._n_out_spec = _normalize_scalar_or_str(mat_out)
 
-        if torch.is_tensor(mat_n_ls):
-            if mat_n_ls.dim() == 1:
-                self._n_layer_specs = [complex(v.item()) for v in mat_n_ls]
-            elif mat_n_ls.dim() == 2 and mat_n_ls.shape[1] == 3:
+        if torch.is_tensor(mat_ls):
+            if mat_ls.dim() == 1:
+                self._n_layer_specs = [complex(v.item()) for v in mat_ls]
+            elif mat_ls.dim() == 2 and mat_ls.shape[1] == 3:
                 self._n_layer_specs = [
                     (complex(row[0].item()), complex(row[1].item()), complex(row[2].item()))
-                    for row in mat_n_ls
+                    for row in mat_ls
                 ]
             else:
-                raise ValueError(f"mat_n_ls tensor must be 1-D or (N,3), got {mat_n_ls.shape}")
+                raise ValueError(f"mat_ls tensor must be 1-D or (N,3), got {mat_ls.shape}")
         else:
-            self._n_layer_specs = [_normalize_layer(s) for s in mat_n_ls]
+            self._n_layer_specs = [_normalize_layer(s) for s in mat_ls]
         self.num_layers = len(self._n_layer_specs)
 
         def _is_scalar_or_scalar_tuple(s):
             if isinstance(s, tuple):
-                return all(isinstance(x, (int, float, complex)) for x in s)
-            return isinstance(s, (int, float, complex))
+                return all(isinstance(x, (float, complex)) for x in s)
+            return isinstance(s, (float, complex))
 
         all_scalar = all(_is_scalar_or_scalar_tuple(s) for s in self._n_layer_specs)
         if all_scalar:
@@ -599,15 +599,6 @@ class FilmSolver:
             self.refract_idx_layers = t.unsqueeze(0).expand(batch_size, -1, -1).clone()
         else:
             self.refract_idx_layers = None
-
-        self.mat_n_in = (
-            float(mat_n_in) if isinstance(mat_n_in, (int, float)) and not isinstance(mat_n_in, bool)
-            else None
-        )
-        self.mat_n_out = (
-            float(mat_n_out) if isinstance(mat_n_out, (int, float)) and not isinstance(mat_n_out, bool)
-            else None
-        )
 
         self.thickness_min = thickness_min
         self.thickness_max = thickness_max
@@ -654,11 +645,11 @@ class FilmSolver:
         else:
             self.film_params = film_thickness_normalized.to(self.device)
 
-        if "layer_specs" in ckpt:
-            self._n_in_spec = _deserialize_spec(ckpt["n_in_spec"], self.device)
-            self._n_out_spec = _deserialize_spec(ckpt["n_out_spec"], self.device)
+        if "mat_ls" in ckpt:
+            self._n_in_spec = _deserialize_spec(ckpt["mat_in"], self.device)
+            self._n_out_spec = _deserialize_spec(ckpt["mat_out"], self.device)
             self._n_layer_specs = [
-                _deserialize_spec(v, self.device) for v in ckpt["layer_specs"]
+                _deserialize_spec(v, self.device) for v in ckpt["mat_ls"]
             ]
 
     def save_ckpt(self, save_path):
@@ -667,16 +658,9 @@ class FilmSolver:
             "film_thickness": self.get_film_thickness().cpu(),
             "batch_size": self.batch_size,
             "num_layers": self.num_layers,
-            "n_in_spec":  _serialize_spec(self._n_in_spec),
-            "n_out_spec": _serialize_spec(self._n_out_spec),
-            "layer_specs": [_serialize_spec(s) for s in self._n_layer_specs],
-            "n_in":  self.mat_n_in,
-            "n_out": self.mat_n_out,
-            "refract_idx_layers": (
-                self.refract_idx_layers.cpu()
-                if self.refract_idx_layers is not None
-                else None
-            ),
+            "mat_in":  _serialize_spec(self._n_in_spec),
+            "mat_out": _serialize_spec(self._n_out_spec),
+            "mat_ls":  [_serialize_spec(s) for s in self._n_layer_specs],
         }
         torch.save(payload, save_path)
 

@@ -7,7 +7,6 @@ from .film_solver_anisotropic import (
     create_jones_matrix_AOIAz,
 )
 from .material import (
-    MATERIAL_data,
     Material,
     list_materials,
     resolve_indices,
@@ -22,7 +21,6 @@ __all__ = [
     "create_jones_matrix_isotropic",
     "create_jones_matrix_AOIAz",
     "Material",
-    "MATERIAL_data",
     "list_materials",
     "resolve_indices",
 ]

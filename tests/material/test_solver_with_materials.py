@@ -13,9 +13,9 @@ def cpu():
 class TestIsotropicSolverMaterials:
     def test_string_inputs(self, cpu):
         solver = IsotropicFilmSolver(
-            mat_n_in="air",
-            mat_n_out="N-BK7",
-            mat_n_ls=["TiO2", "SiO2"],
+            mat_in="air",
+            mat_out="N-BK7",
+            mat_ls=["TiO2", "SiO2"],
             thickness_ls=[0.06, 0.10],
             device=cpu,
         )
@@ -27,9 +27,9 @@ class TestIsotropicSolverMaterials:
 
     def test_mixed_scalar_and_material(self, cpu):
         solver = IsotropicFilmSolver(
-            mat_n_in=1.0,
-            mat_n_out=1.52,
-            mat_n_ls=[2.4, Material("SiO2", device=cpu), "TiO2"],
+            mat_in=1.0,
+            mat_out=1.52,
+            mat_ls=[2.4, Material("SiO2", device=cpu), "TiO2"],
             thickness_ls=[0.06, 0.10, 0.06],
             device=cpu,
         )
@@ -41,9 +41,9 @@ class TestIsotropicSolverMaterials:
 
     def test_scalar_only_still_works(self, cpu):
         solver = IsotropicFilmSolver(
-            mat_n_in=1.0,
-            mat_n_out=1.52,
-            mat_n_ls=[2.1, 1.46, 2.1],
+            mat_in=1.0,
+            mat_out=1.52,
+            mat_ls=[2.1, 1.46, 2.1],
             thickness_ls=[0.08, 0.12, 0.08],
             device=cpu,
         )
@@ -56,9 +56,9 @@ class TestIsotropicSolverMaterials:
     def test_unknown_material_name_fails_fast(self, cpu):
         with pytest.raises(NotImplementedError):
             IsotropicFilmSolver(
-                mat_n_in="air",
-                mat_n_out=1.52,
-                mat_n_ls=["NotAMaterial"],
+                mat_in="air",
+                mat_out=1.52,
+                mat_ls=["NotAMaterial"],
                 thickness_ls=[0.1],
                 device=cpu,
             )
@@ -68,17 +68,17 @@ class TestIsotropicCheckpoint:
     def test_roundtrip_material_stack(self, tmp_path, cpu):
         path = tmp_path / "ckpt.pt"
         solver1 = IsotropicFilmSolver(
-            mat_n_in="air",
-            mat_n_out="N-BK7",
-            mat_n_ls=["TiO2", "SiO2"],
+            mat_in="air",
+            mat_out="N-BK7",
+            mat_ls=["TiO2", "SiO2"],
             thickness_ls=[0.06, 0.10],
             device=cpu,
         )
         solver1.save_ckpt(path)
         solver2 = IsotropicFilmSolver(
-            mat_n_in="air",
-            mat_n_out="N-BK7",
-            mat_n_ls=["TiO2", "SiO2"],
+            mat_in="air",
+            mat_out="N-BK7",
+            mat_ls=["TiO2", "SiO2"],
             thickness_ls=[0.001, 0.001],
             device=cpu,
         )
@@ -93,9 +93,9 @@ class TestIsotropicCheckpoint:
     def test_roundtrip_scalar_stack(self, tmp_path, cpu):
         path = tmp_path / "ckpt.pt"
         solver = IsotropicFilmSolver(
-            mat_n_in=1.0,
-            mat_n_out=1.52,
-            mat_n_ls=[2.10, 1.46, 2.10],
+            mat_in=1.0,
+            mat_out=1.52,
+            mat_ls=[2.10, 1.46, 2.10],
             thickness_ls=[0.08, 0.12, 0.08],
             device=cpu,
         )
@@ -106,9 +106,9 @@ class TestIsotropicCheckpoint:
 class TestAnisotropicSolverIsotropicInputs:
     def test_string_inputs_isotropic_path(self, cpu):
         solver = FilmSolver(
-            mat_n_in="air",
-            mat_n_out="N-BK7",
-            mat_n_ls=["TiO2", "SiO2"],
+            mat_in="air",
+            mat_out="N-BK7",
+            mat_ls=["TiO2", "SiO2"],
             thickness_ls=[0.06, 0.10],
             device=cpu,
         )

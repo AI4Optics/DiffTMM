@@ -7,9 +7,9 @@ from difftmm import IsotropicFilmSolver, FilmSolver
 
 def test_isotropic_scalar_api_outputs_finite():
     solver = IsotropicFilmSolver(
-        mat_n_in=1.0,
-        mat_n_out=1.52,
-        mat_n_ls=[2.10, 1.46, 2.10],
+        mat_in=1.0,
+        mat_out=1.52,
+        mat_ls=[2.10, 1.46, 2.10],
         thickness_ls=[0.080, 0.120, 0.080],
         device=torch.device("cpu"),
     )
@@ -23,9 +23,9 @@ def test_isotropic_scalar_api_outputs_finite():
 def test_isotropic_scalar_api_energy_conservation_at_normal_incidence():
     """|R|^2 + |T|^2 = 1 for lossless stack with n_in == n_out at normal incidence."""
     solver = IsotropicFilmSolver(
-        mat_n_in=1.0,
-        mat_n_out=1.0,
-        mat_n_ls=[2.10, 1.46, 2.10],
+        mat_in=1.0,
+        mat_out=1.0,
+        mat_ls=[2.10, 1.46, 2.10],
         thickness_ls=[0.080, 0.120, 0.080],
         device=torch.device("cpu"),
     )
@@ -40,11 +40,9 @@ def test_isotropic_scalar_api_energy_conservation_at_normal_incidence():
 def test_top_level_imports():
     from difftmm import (
         Material,
-        MATERIAL_data,
         list_materials,
         IsotropicFilmSolver,
         FilmSolver,
     )
     assert callable(Material)
-    assert isinstance(MATERIAL_data, dict)
     assert "air" in list_materials()

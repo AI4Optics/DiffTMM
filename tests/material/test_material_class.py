@@ -10,8 +10,8 @@ class TestAirMaterial:
         assert mat.name == "air"
         assert mat.dispersion == "sellmeier"
 
-    @pytest.mark.parametrize("alias", ["air", "AIR", "vacuum", "occluder", "Air"])
-    def test_air_aliases_normalize(self, alias):
+    @pytest.mark.parametrize("alias", ["air", "AIR", "Air"])
+    def test_air_name_normalizes(self, alias):
         assert Material(alias).name == "air"
 
     def test_air_ior_returns_complex_one(self, wvln_vis):
@@ -50,57 +50,9 @@ class TestAGFLoading:
             Material("not_a_real_material_xyz")
 
     def test_schott_mode_entries_are_skipped(self):
-        # PLASTIC2022.AGF entries are mostly mode=1 (Schott). They should NOT
-        # be loadable as Sellmeier in v1.
-        # PMMA is in materials_data.json's SCHOTT_TABLE only — not yet supported,
-        # so it should raise.
+        # PLASTIC2022.AGF entries are mostly mode=1 (Schott) — not supported in v1.
         with pytest.raises(NotImplementedError):
-            Material("PMMA")  # depends: must not match an AGF Sellmeier entry
-
-
-class TestJSONSellmeier:
-    def test_bk7_lowercase_from_json(self):
-        # 'bk7' is in materials_data.json SELLMEIER_TABLE
-        mat = Material("bk7")
-        assert mat.dispersion == "sellmeier"
-        wvln = torch.tensor([0.5876])
-        n = mat.ior(wvln).real.item()
-        assert abs(n - 1.5168) < 1e-3
-
-    def test_s_til6_json_only_material(self):
-        """s-til6 exists only in JSON SELLMEIER_TABLE, not in any AGF catalog."""
-        mat = Material("s-til6")
-        assert mat.dispersion == "sellmeier"
-        assert abs(mat.n - 1.5317) < 1e-4
-        assert abs(mat.V - 48.84) < 1e-2
-        wvln = torch.tensor([0.5876])
-        n = mat.ior(wvln).real.item()
-        assert abs(n - 1.5317) < 1e-3
-
-
-class TestInterpRealN:
-    def test_fused_silica_at_d_line(self):
-        # 'fused_silica' is in materials_data.json INTERP_TABLE
-        mat = Material("fused_silica")
-        assert mat.dispersion == "interp"
-        wvln = torch.tensor([0.5876])
-        n = mat.ior(wvln)
-        # At 0.5876, table values bracket; the result should be a real value ~1.46
-        assert n.dtype == torch.complex64
-        assert abs(n.real.item() - 1.4596) < 0.005
-        assert n.imag.item() == pytest.approx(0.0)
-
-    def test_interp_vector_output(self, wvln_vis):
-        mat = Material("fused_silica")
-        n = mat.ior(wvln_vis)
-        assert n.shape == wvln_vis.shape
-        assert n.dtype == torch.complex64
-
-    def test_interp_endpoints_match_table(self):
-        mat = Material("fused_silica")
-        # First table point is (0.40, 1.4701)
-        wvln = torch.tensor([0.40])
-        assert abs(mat.ior(wvln).real.item() - 1.4701) < 1e-4
+            Material("PMMA")
 
 
 class TestInterpNK:
