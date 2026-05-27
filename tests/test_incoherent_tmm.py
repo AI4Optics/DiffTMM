@@ -18,7 +18,7 @@ if REPO_ROOT not in sys.path:
 from tmm_numpy.tmm_core import R_from_r, T_from_t, coh_tmm  # noqa: E402
 
 from difftmm.film_solver_isotropic import create_jones_matrix_isotropic  # noqa: E402
-from difftmm.film_solver_incoherent import coh_stack_power_RT_isotropic  # noqa: E402
+from difftmm.film_solver_incoherent import IncoherentIsotropicFilmSolver  # noqa: E402
 
 
 DEVICE = torch.device("cpu")
@@ -47,7 +47,7 @@ def test_coh_stack_power_RT_matches_tmm_numpy():
 
     n_t, d_t, wv_t, th_t = _wrap_inputs(n_layers, d_layers, wv, theta)
 
-    Rs, Rp, Ts, Tp = coh_stack_power_RT_isotropic(
+    Rs, Rp, Ts, Tp = IncoherentIsotropicFilmSolver.coh_stack_power_RT_isotropic(
         n_t, d_t, wv_t, n_in, n_out, th_t
     )
 
@@ -73,7 +73,7 @@ def test_coh_stack_power_RT_asymmetric_and_energy_conservation():
     theta = 0.9  # ~51.5 deg, comfortably away from normal incidence
 
     n_t, d_t, wv_t, th_t = _wrap_inputs(n_layers, d_layers, wv, theta)
-    Rs, Rp, Ts, Tp = coh_stack_power_RT_isotropic(
+    Rs, Rp, Ts, Tp = IncoherentIsotropicFilmSolver.coh_stack_power_RT_isotropic(
         n_t, d_t, wv_t, n_in, n_out, th_t
     )
 
@@ -91,12 +91,9 @@ def test_coh_stack_power_RT_asymmetric_and_energy_conservation():
     assert np.allclose(Rp.item() + Tp.item(), 1.0, atol=1e-5)
 
 
-from difftmm.film_solver_incoherent import group_layers_by_coherence  # noqa: E402
-
-
 def test_group_layers_all_incoherent():
     """All-incoherent stack: no coherent groups, each layer is its own incoherent unit."""
-    groups = group_layers_by_coherence(["i", "i", "i"])
+    groups = IncoherentIsotropicFilmSolver.group_layers_by_coherence(["i", "i", "i"])
     assert groups["num_inc_layers"] == 3
     assert groups["num_stacks"] == 0
     assert groups["stack_alllayer_indices"] == []
@@ -108,7 +105,7 @@ def test_group_layers_all_incoherent():
 
 def test_group_layers_single_coherent_stack_inside():
     """i | c c | i — one stack of two coherent layers."""
-    groups = group_layers_by_coherence(["i", "c", "c", "i"])
+    groups = IncoherentIsotropicFilmSolver.group_layers_by_coherence(["i", "c", "c", "i"])
     assert groups["num_inc_layers"] == 2
     assert groups["num_stacks"] == 1
     # The stack spans alllayer indices 1, 2 plus its incoherent bookends (0 and 3).
@@ -122,7 +119,7 @@ def test_group_layers_single_coherent_stack_inside():
 
 def test_group_layers_multiple_stacks():
     """i | c | i | c c | i — two stacks separated by an incoherent layer."""
-    groups = group_layers_by_coherence(["i", "c", "i", "c", "c", "i"])
+    groups = IncoherentIsotropicFilmSolver.group_layers_by_coherence(["i", "c", "i", "c", "c", "i"])
     assert groups["num_inc_layers"] == 3
     assert groups["num_stacks"] == 2
     assert groups["stack_alllayer_indices"] == [[0, 1, 2], [2, 3, 4, 5]]
@@ -134,17 +131,16 @@ def test_group_layers_multiple_stacks():
 def test_group_layers_endpoints_must_be_incoherent():
     """First and last layers are semi-infinite, must be 'i'."""
     with pytest.raises(ValueError, match="must start and end with"):
-        group_layers_by_coherence(["c", "c", "i"])
+        IncoherentIsotropicFilmSolver.group_layers_by_coherence(["c", "c", "i"])
     with pytest.raises(ValueError, match="must start and end with"):
-        group_layers_by_coherence(["i", "c", "c"])
+        IncoherentIsotropicFilmSolver.group_layers_by_coherence(["i", "c", "c"])
 
 
 def test_group_layers_rejects_unknown_codes():
     with pytest.raises(ValueError, match="entries must be"):
-        group_layers_by_coherence(["i", "x", "i"])
+        IncoherentIsotropicFilmSolver.group_layers_by_coherence(["i", "x", "i"])
 
 
-from difftmm.film_solver_incoherent import interface_power_RT  # noqa: E402
 from tmm_numpy.tmm_core import interface_R as ref_interface_R  # noqa: E402
 from tmm_numpy.tmm_core import interface_T as ref_interface_T  # noqa: E402
 from tmm_numpy.tmm_core import snell as ref_snell  # noqa: E402
@@ -161,7 +157,7 @@ def test_interface_power_RT_real_indices():
     cos_i = torch.tensor(np.cos(theta_i), dtype=torch.complex64)
     cos_f = torch.tensor(np.cos(theta_f), dtype=torch.complex64)
 
-    Rs, Rp, Ts, Tp = interface_power_RT(n_i_t, n_f_t, cos_i, cos_f)
+    Rs, Rp, Ts, Tp = IncoherentIsotropicFilmSolver.interface_power_RT(n_i_t, n_f_t, cos_i, cos_f)
 
     assert np.allclose(Rs.item(), ref_interface_R("s", n_i, n_f, theta_i, theta_f), atol=ATOL)
     assert np.allclose(Rp.item(), ref_interface_R("p", n_i, n_f, theta_i, theta_f), atol=ATOL)
@@ -389,9 +385,6 @@ def test_inc_optimization_loop_reduces_loss():
     assert losses[-1] < losses[0] * 0.5, (
         f"Optimization didn't reduce loss: start={losses[0]:.4f}, end={losses[-1]:.4f}"
     )
-
-
-from difftmm.film_solver_incoherent import IncoherentIsotropicFilmSolver  # noqa: E402
 
 
 def test_incoherent_solver_class_matches_functional_api():
