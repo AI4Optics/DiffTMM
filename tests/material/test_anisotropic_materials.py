@@ -46,4 +46,4 @@ def test_anisotropic_3tuple_checkpoint_roundtrip(tmp_path):
     solver.save_ckpt(path)
     ckpt = torch.load(path, weights_only=False)
     assert ckpt["mat_ls"][0] == ("sio2", "tio2", "sio2")
-    assert all(isinstance(v, complex) for v in ckpt["mat_ls"][1])
+    assert all(isinstance(v, (float, complex)) for v in ckpt["mat_ls"][1])

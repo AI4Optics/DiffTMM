@@ -141,7 +141,8 @@ class Material:
     """Optical material with wavelength-dependent complex refractive index.
 
     Attributes:
-        name (str): Lowercase material name, or str(value) for constant materials.
+        name (str | float | complex): Lowercase material name for catalog materials,
+            or the original numeric value for constant-dispersion materials.
         dispersion (str): 'sellmeier' | 'interp' | 'constant'.
         n (float): Nominal refractive index at d-line (587 nm).
         V (float): Abbe number (1e38 for non-dispersive materials).
@@ -158,7 +159,7 @@ class Material:
         if isinstance(name, (float, complex)):
             n = complex(name)
             self._const_n = n
-            self.name = str(name)
+            self.name = name
             self.dispersion = "constant"
             self.n = n.real
             self.V = 1e38

@@ -2,7 +2,6 @@ import pytest
 import torch
 
 from difftmm import IsotropicFilmSolver, FilmSolver
-from difftmm.material import Material
 
 
 @pytest.fixture
@@ -29,7 +28,7 @@ class TestIsotropicSolverMaterials:
         solver = IsotropicFilmSolver(
             mat_in=1.0,
             mat_out=1.52,
-            mat_ls=[2.4, Material("SiO2", device=cpu), "TiO2"],
+            mat_ls=[2.4, "SiO2", "TiO2"],
             thickness_ls=[0.06, 0.10, 0.06],
             device=cpu,
         )
@@ -87,8 +86,8 @@ class TestIsotropicCheckpoint:
             solver1.get_film_thickness(), solver2.get_film_thickness()
         )
         from difftmm.material import Material
-        assert isinstance(solver2._n_layer_specs[0], Material)
-        assert solver2._n_layer_specs[0].name == "tio2"
+        assert isinstance(solver2.mat_ls[0], Material)
+        assert solver2.mat_ls[0].name == "tio2"
 
     def test_roundtrip_scalar_stack(self, tmp_path, cpu):
         path = tmp_path / "ckpt.pt"

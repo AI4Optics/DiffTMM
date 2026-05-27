@@ -10,7 +10,7 @@ Copyright (c) 2026, Xinge Yang, Qingyuan Fan, Zhaocheng Liu.
 
 import torch
 
-from .material import _deserialize_spec, _serialize_spec
+from .material import Material
 
 
 # =========================
@@ -546,55 +546,52 @@ class FilmSolver:
         sigmoid_param=False,
         device=torch.device("cuda"),
     ):
-        from .material import Material
+        """Initialize the anisotropic film solver.
 
+        Args:
+            mat_in: Refractive index of incident medium. float, complex, or str material name.
+            mat_out: Refractive index of exit medium. Same types as mat_in.
+            mat_ls: Refractive indices of interior layers. Each element is either a
+                float/complex scalar or str material name (isotropic layer), or a
+                3-tuple of those types for (nx, ny, nz) birefringent layers.
+            thickness_ls: Thicknesses of interior layers in um, list or tensor of length N.
+                If None, randomly initializes thicknesses.
+            thickness_min: Minimum layer thickness in um.
+            thickness_max: Maximum layer thickness in um.
+            batch_size: Number of film stacks in the batch dimension.
+            sigmoid_param: If True, use sigmoid parameterization for thickness.
+            device: PyTorch device.
+        """
         self.batch_size = batch_size
         self.device = device
 
-        def _normalize_scalar_or_str(spec):
-            if isinstance(spec, str):
-                return Material(spec, device=device)
-            return spec
+        self.mat_in  = Material(mat_in,  device=device)
+        self.mat_out = Material(mat_out, device=device)
 
-        def _normalize_layer(spec):
+        def _to_mat_layer(spec):
             if isinstance(spec, tuple):
                 if len(spec) != 3:
                     raise ValueError(
                         f"anisotropic layer spec must be 3-tuple, got len {len(spec)}"
                     )
-                return tuple(_normalize_scalar_or_str(s) for s in spec)
-            return _normalize_scalar_or_str(spec)
+                return tuple(Material(x, device=device) for x in spec)
+            return Material(spec, device=device)
 
-        self._n_in_spec = _normalize_scalar_or_str(mat_in)
-        self._n_out_spec = _normalize_scalar_or_str(mat_out)
+        self.mat_ls = [_to_mat_layer(s) for s in mat_ls]
+        self.num_layers = len(self.mat_ls)
 
-        if torch.is_tensor(mat_ls):
-            if mat_ls.dim() == 1:
-                self._n_layer_specs = [complex(v.item()) for v in mat_ls]
-            elif mat_ls.dim() == 2 and mat_ls.shape[1] == 3:
-                self._n_layer_specs = [
-                    (complex(row[0].item()), complex(row[1].item()), complex(row[2].item()))
-                    for row in mat_ls
-                ]
-            else:
-                raise ValueError(f"mat_ls tensor must be 1-D or (N,3), got {mat_ls.shape}")
-        else:
-            self._n_layer_specs = [_normalize_layer(s) for s in mat_ls]
-        self.num_layers = len(self._n_layer_specs)
-
-        def _is_scalar_or_scalar_tuple(s):
-            if isinstance(s, tuple):
-                return all(isinstance(x, (float, complex)) for x in s)
-            return isinstance(s, (float, complex))
-
-        all_scalar = all(_is_scalar_or_scalar_tuple(s) for s in self._n_layer_specs)
-        if all_scalar:
+        all_constant = all(
+            (all(x.dispersion == "constant" for x in s) if isinstance(s, tuple)
+             else s.dispersion == "constant")
+            for s in self.mat_ls
+        )
+        if all_constant:
             rows = []
-            for s in self._n_layer_specs:
+            for s in self.mat_ls:
                 if isinstance(s, tuple):
-                    rows.append([complex(s[0]), complex(s[1]), complex(s[2])])
+                    rows.append([s[0]._const_n, s[1]._const_n, s[2]._const_n])
                 else:
-                    rows.append([complex(s), complex(s), complex(s)])
+                    rows.append([s._const_n, s._const_n, s._const_n])
             t = torch.tensor(rows, dtype=torch.complex64)
             self.refract_idx_layers = t.unsqueeze(0).expand(batch_size, -1, -1).clone()
         else:
@@ -626,6 +623,14 @@ class FilmSolver:
         self.film_params = self.film_params.to(device)
         if self.refract_idx_layers is not None:
             self.refract_idx_layers = self.refract_idx_layers.to(device)
+        self.mat_in.to(device)
+        self.mat_out.to(device)
+        for s in self.mat_ls:
+            if isinstance(s, tuple):
+                for m in s:
+                    m.to(device)
+            else:
+                s.to(device)
         return self
 
     def load_ckpt(self, ckpt_path):
@@ -646,21 +651,28 @@ class FilmSolver:
             self.film_params = film_thickness_normalized.to(self.device)
 
         if "mat_ls" in ckpt:
-            self._n_in_spec = _deserialize_spec(ckpt["mat_in"], self.device)
-            self._n_out_spec = _deserialize_spec(ckpt["mat_out"], self.device)
-            self._n_layer_specs = [
-                _deserialize_spec(v, self.device) for v in ckpt["mat_ls"]
+            self.mat_in  = Material(ckpt["mat_in"],  device=self.device)
+            self.mat_out = Material(ckpt["mat_out"], device=self.device)
+            self.mat_ls  = [
+                tuple(Material(x, device=self.device) for x in v) if isinstance(v, tuple)
+                else Material(v, device=self.device)
+                for v in ckpt["mat_ls"]
             ]
 
     def save_ckpt(self, save_path):
         """Save thicknesses and material specs to a checkpoint."""
+        def _layer_name(s):
+            if isinstance(s, tuple):
+                return tuple(m.name for m in s)
+            return s.name
+
         payload = {
             "film_thickness": self.get_film_thickness().cpu(),
             "batch_size": self.batch_size,
             "num_layers": self.num_layers,
-            "mat_in":  _serialize_spec(self._n_in_spec),
-            "mat_out": _serialize_spec(self._n_out_spec),
-            "mat_ls":  [_serialize_spec(s) for s in self._n_layer_specs],
+            "mat_in":  self.mat_in.name,
+            "mat_out": self.mat_out.name,
+            "mat_ls":  [_layer_name(s) for s in self.mat_ls],
         }
         torch.save(payload, save_path)
 
@@ -700,8 +712,6 @@ class FilmSolver:
             ts, tp, rs, rp: Complex transmission/reflection coefficients,
                             shape (batch_size, n_wvlns, n_angles).
         """
-        from .material import resolve_indices
-
         if not torch.is_tensor(theta):
             theta = torch.tensor(theta, dtype=torch.float32, device=self.device)
         theta = theta.to(self.device)
@@ -722,23 +732,19 @@ class FilmSolver:
         n_wvlns = wv.shape[0]
         n_angles = theta.shape[1]
 
-        n_in_t = resolve_indices(self._n_in_spec, wv, self.device).unsqueeze(0).expand(
-            self.batch_size, -1
-        )
-        n_out_t = resolve_indices(self._n_out_spec, wv, self.device).unsqueeze(0).expand(
-            self.batch_size, -1
-        )
+        n_in_t  = self.mat_in.ior(wv).unsqueeze(0).expand(self.batch_size, -1)
+        n_out_t = self.mat_out.ior(wv).unsqueeze(0).expand(self.batch_size, -1)
 
         # Build n_2d_w: shape (batch, n_wvln, n_layer, 3)
         per_layer_axes = []
-        for s in self._n_layer_specs:
+        for s in self.mat_ls:
             if isinstance(s, tuple):
                 cols = torch.stack(
-                    [resolve_indices(s, wv, self.device, axis=ax) for ax in (0, 1, 2)],
+                    [s[ax].ior(wv) for ax in range(3)],
                     dim=-1,
                 )
             else:
-                col = resolve_indices(s, wv, self.device)
+                col = s.ior(wv)
                 cols = col.unsqueeze(-1).expand(-1, 3)
             per_layer_axes.append(cols)
         n_2d_w = torch.stack(per_layer_axes, dim=-2)
