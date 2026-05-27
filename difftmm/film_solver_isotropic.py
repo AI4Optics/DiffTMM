@@ -20,6 +20,35 @@ def inv_sigmoid(x):
     return torch.log(x / (1 - x))
 
 
+def _serialize_spec(spec):
+    """Serialize one refractive-index spec to a checkpoint-safe value.
+
+    Material → its lowercase name (str); scalar → complex; 3-tuple → tuple of
+    the above (anisotropic; not used by the isotropic solver but supported for
+    symmetry).
+    """
+    from .material import Material
+
+    if isinstance(spec, Material):
+        return spec.name
+    if isinstance(spec, tuple):
+        return tuple(_serialize_spec(s) for s in spec)
+    if isinstance(spec, (int, float, complex)):
+        return complex(spec)
+    raise TypeError(f"Cannot serialize spec of type {type(spec).__name__}")
+
+
+def _deserialize_spec(value, device):
+    """Inverse of _serialize_spec — rewraps strings as Material(name)."""
+    from .material import Material
+
+    if isinstance(value, str):
+        return Material(value, device=device)
+    if isinstance(value, tuple):
+        return tuple(_deserialize_spec(v, device) for v in value)
+    return value
+
+
 @torch.jit.script
 def _batch_2x2_matmul(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     """
@@ -433,9 +462,11 @@ class IsotropicFilmSolver:
         Initialize the isotropic film solver.
 
         Args:
-            mat_n_in: Refractive index of incident medium (scalar).
-            mat_n_out: Refractive index of exit medium (scalar).
-            mat_n_ls: Refractive indices of interior layers, list or tensor of length N.
+            mat_n_in: Refractive index of incident medium. May be a scalar
+                      (int/float/complex), a str material name, or a Material.
+            mat_n_out: Refractive index of exit medium. Same types as mat_n_in.
+            mat_n_ls: Refractive indices of interior layers. May be a list/tensor
+                      of scalars, str material names, and/or Material objects.
             thickness_ls: Thicknesses of interior layers in um, list or tensor of length N.
                           If None, randomly initializes thicknesses.
             thickness_min: Minimum layer thickness in um.
@@ -444,57 +475,93 @@ class IsotropicFilmSolver:
             sigmoid_param: If True, use sigmoid parameterization for thickness.
             device: PyTorch device.
         """
-        # Parameters
+        from .material import Material
+
         self.batch_size = batch_size
-        self.mat_n_in = float(mat_n_in)
-        self.mat_n_out = float(mat_n_out)
         self.device = device
 
-        # Set up refractive indices for each layer
-        if torch.is_tensor(mat_n_ls):
-            n_layers_t = mat_n_ls.to(torch.complex64)
-        else:
-            n_layers_t = torch.tensor(mat_n_ls, dtype=torch.complex64)
-        self.num_layers = len(n_layers_t)
-        self.refract_idx_layers = n_layers_t.unsqueeze(0).expand(self.batch_size, -1).clone()
+        def _normalize(spec):
+            if isinstance(spec, str):
+                return Material(spec, device=device)
+            return spec
 
-        # Min and max single layer film thickness in [um]
+        self._n_in_spec = _normalize(mat_n_in)
+        self._n_out_spec = _normalize(mat_n_out)
+
+        if torch.is_tensor(mat_n_ls):
+            specs = [complex(v.item()) for v in mat_n_ls.flatten()]
+        else:
+            specs = list(mat_n_ls)
+        normalized_specs = []
+        for s in specs:
+            if isinstance(s, tuple):
+                raise ValueError(
+                    "IsotropicFilmSolver does not support anisotropic (3-tuple) "
+                    "material specs. Use FilmSolver for anisotropic stacks."
+                )
+            normalized_specs.append(_normalize(s))
+        self._n_layer_specs = normalized_specs
+        self.num_layers = len(normalized_specs)
+
+        all_scalar = all(
+            isinstance(s, (int, float, complex)) for s in self._n_layer_specs
+        )
+        if all_scalar:
+            t = torch.tensor(
+                [complex(s) for s in self._n_layer_specs], dtype=torch.complex64
+            )
+            self.refract_idx_layers = t.unsqueeze(0).expand(batch_size, -1).clone()
+        else:
+            self.refract_idx_layers = None
+
+        self.mat_n_in = (
+            float(mat_n_in)
+            if isinstance(mat_n_in, (int, float)) and not isinstance(mat_n_in, bool)
+            else None
+        )
+        self.mat_n_out = (
+            float(mat_n_out)
+            if isinstance(mat_n_out, (int, float)) and not isinstance(mat_n_out, bool)
+            else None
+        )
+
         self.thickness_min = thickness_min
         self.thickness_max = thickness_max
-        self._thickness_range = self.thickness_max - self.thickness_min  # Pre-compute
+        self._thickness_range = self.thickness_max - self.thickness_min
 
-        # Initialize film_params in normalized [0, 1] space
         self.sigmoid_param = sigmoid_param
         if thickness_ls is not None:
             if not torch.is_tensor(thickness_ls):
                 thickness_ls = torch.tensor(thickness_ls, dtype=torch.float32)
-            normalized = (thickness_ls.clamp(self.thickness_min, self.thickness_max) - self.thickness_min) / self._thickness_range
-            self.film_params = normalized.unsqueeze(0).expand(self.batch_size, -1).clone()
+            normalized = (
+                thickness_ls.clamp(self.thickness_min, self.thickness_max)
+                - self.thickness_min
+            ) / self._thickness_range
+            self.film_params = normalized.unsqueeze(0).expand(batch_size, -1).clone()
         else:
-            self.film_params = torch.randn(self.batch_size, self.num_layers) * 0.01 + 0.5
-
-        # Convert to sigmoid (logit) parameterization if requested
+            self.film_params = torch.randn(batch_size, self.num_layers) * 0.01 + 0.5
         if self.sigmoid_param:
             self.film_params = inv_sigmoid(self.film_params.clamp(1e-6, 1 - 1e-6))
 
-        # Move to device
         self.to(device)
 
     def to(self, device):
         """Move tensors to specified device."""
         self.device = device
         self.film_params = self.film_params.to(device, non_blocking=True)
-        self.refract_idx_layers = self.refract_idx_layers.to(device, non_blocking=True)
+        if self.refract_idx_layers is not None:
+            self.refract_idx_layers = self.refract_idx_layers.to(device, non_blocking=True)
         return self
 
     def load_ckpt(self, ckpt_path):
-        """Load checkpoint from file path."""
-        ckpt = torch.load(ckpt_path, map_location=self.device, weights_only=True)
-        film_thickness = torch.clamp(ckpt["film_thickness"], self.thickness_min, self.thickness_max)
+        """Load thicknesses (and spec metadata) from a checkpoint."""
+        ckpt = torch.load(ckpt_path, map_location=self.device, weights_only=False)
+        film_thickness = torch.clamp(
+            ckpt["film_thickness"], self.thickness_min, self.thickness_max
+        )
         film_thickness_normalized = (film_thickness - self.thickness_min) / (
             self.thickness_max - self.thickness_min
         )
-
         if self.sigmoid_param:
             film_thickness_normalized = torch.clamp(
                 film_thickness_normalized, 1e-6, 1 - 1e-6
@@ -503,19 +570,35 @@ class IsotropicFilmSolver:
         else:
             self.film_params = film_thickness_normalized.to(self.device)
 
+        if "layer_specs" in ckpt:
+            self._n_in_spec = _deserialize_spec(ckpt["n_in_spec"], self.device)
+            self._n_out_spec = _deserialize_spec(ckpt["n_out_spec"], self.device)
+            self._n_layer_specs = [
+                _deserialize_spec(v, self.device) for v in ckpt["layer_specs"]
+            ]
+
     def save_ckpt(self, save_path):
-        """Save checkpoint."""
-        torch.save(
-            {
-                "film_thickness": self.get_film_thickness().cpu(),
-                "batch_size": self.batch_size,
-                "num_layers": self.num_layers,
-                "n_in": self.mat_n_in,
-                "n_out": self.mat_n_out,
-                "refract_idx_layers": self.refract_idx_layers.cpu(),
-            },
-            save_path,
-        )
+        """Save thicknesses and material specs to a checkpoint.
+
+        Material objects are persisted by name; scalars are persisted by value.
+        Per-axis 3-tuples are persisted element-wise.
+        """
+        payload = {
+            "film_thickness": self.get_film_thickness().cpu(),
+            "batch_size": self.batch_size,
+            "num_layers": self.num_layers,
+            "n_in_spec":  _serialize_spec(self._n_in_spec),
+            "n_out_spec": _serialize_spec(self._n_out_spec),
+            "layer_specs": [_serialize_spec(s) for s in self._n_layer_specs],
+            "n_in":  self.mat_n_in,
+            "n_out": self.mat_n_out,
+            "refract_idx_layers": (
+                self.refract_idx_layers.cpu()
+                if self.refract_idx_layers is not None
+                else None
+            ),
+        }
+        torch.save(payload, save_path)
 
     # ===========================================
     # Film simulation
@@ -553,14 +636,14 @@ class IsotropicFilmSolver:
             ts, tp, rs, rp: Complex transmission/reflection coefficients.
                            Shape: (batch_size, n_wvlns, n_angles)
         """
-        # Handle theta input
+        from .material import resolve_indices
+
         if not torch.is_tensor(theta):
             theta = torch.tensor(theta, dtype=torch.float32, device=self.device)
         theta = theta.to(self.device)
         if theta.dim() == 1:
             theta = theta.unsqueeze(0).expand(self.batch_size, -1)
 
-        # Handle wavelength input
         if torch.is_tensor(wvln):
             wv = wvln.to(self.device)
             if wv.dim() == 0:
@@ -571,12 +654,20 @@ class IsotropicFilmSolver:
             wv = torch.tensor([wvln], dtype=torch.float32, device=self.device)
         wv_batch = wv.unsqueeze(0).expand(self.batch_size, -1)
 
-        # Get film thickness and compute TMM results
+        n_in_t = resolve_indices(self._n_in_spec, wv, self.device).unsqueeze(0).expand(
+            self.batch_size, -1
+        )
+        n_out_t = resolve_indices(self._n_out_spec, wv, self.device).unsqueeze(0).expand(
+            self.batch_size, -1
+        )
+        per_layer = [resolve_indices(s, wv, self.device) for s in self._n_layer_specs]
+        n_layers_t = torch.stack(per_layer, dim=-1)
+        n_layers_t = n_layers_t.unsqueeze(0).expand(self.batch_size, -1, -1)
+
         d_batch = self.get_film_thickness()
         ts, tp, rs, rp = create_jones_matrix_isotropic(
-            self.refract_idx_layers, d_batch, wv_batch, self.mat_n_in, self.mat_n_out, theta
+            n_layers_t, d_batch, wv_batch, n_in_t, n_out_t, theta
         )
-
         return ts, tp, rs, rp
 
     def __call__(self, theta, wvln):
