@@ -1,7 +1,6 @@
 from .film_solver_isotropic import (
     IsotropicFilmSolver,
     create_jones_matrix_isotropic,
-    create_intensity_RT_isotropic,
 )
 from .film_solver_anisotropic import (
     FilmSolver,
@@ -9,6 +8,7 @@ from .film_solver_anisotropic import (
 )
 from .film_solver_incoherent import (
     IncoherentIsotropicFilmSolver,
+    create_intensity_RT_isotropic,
 )
 
 AnisotropicFilmSolver = FilmSolver

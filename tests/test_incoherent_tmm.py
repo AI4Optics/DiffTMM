@@ -17,10 +17,8 @@ if REPO_ROOT not in sys.path:
 
 from tmm_numpy.tmm_core import R_from_r, T_from_t, coh_tmm  # noqa: E402
 
-from difftmm.film_solver_isotropic import (  # noqa: E402
-    create_jones_matrix_isotropic,
-    coh_stack_power_RT_isotropic,
-)
+from difftmm.film_solver_isotropic import create_jones_matrix_isotropic  # noqa: E402
+from difftmm.film_solver_incoherent import coh_stack_power_RT_isotropic  # noqa: E402
 
 
 DEVICE = torch.device("cpu")
@@ -93,7 +91,7 @@ def test_coh_stack_power_RT_asymmetric_and_energy_conservation():
     assert np.allclose(Rp.item() + Tp.item(), 1.0, atol=1e-5)
 
 
-from difftmm.film_solver_isotropic import group_layers_by_coherence  # noqa: E402
+from difftmm.film_solver_incoherent import group_layers_by_coherence  # noqa: E402
 
 
 def test_group_layers_all_incoherent():
@@ -146,7 +144,7 @@ def test_group_layers_rejects_unknown_codes():
         group_layers_by_coherence(["i", "x", "i"])
 
 
-from difftmm.film_solver_isotropic import interface_power_RT  # noqa: E402
+from difftmm.film_solver_incoherent import interface_power_RT  # noqa: E402
 from tmm_numpy.tmm_core import interface_R as ref_interface_R  # noqa: E402
 from tmm_numpy.tmm_core import interface_T as ref_interface_T  # noqa: E402
 from tmm_numpy.tmm_core import snell as ref_snell  # noqa: E402
@@ -174,7 +172,7 @@ def test_interface_power_RT_real_indices():
     assert np.allclose(Rp.item() + Tp.item(), 1.0, atol=ATOL)
 
 
-from difftmm.film_solver_isotropic import create_intensity_RT_isotropic  # noqa: E402
+from difftmm.film_solver_incoherent import create_intensity_RT_isotropic  # noqa: E402
 from tmm_numpy.tmm_core import inc_tmm as ref_inc_tmm  # noqa: E402
 
 INF = float("inf")
