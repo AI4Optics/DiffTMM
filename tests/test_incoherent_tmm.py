@@ -393,7 +393,7 @@ def test_inc_optimization_loop_reduces_loss():
     )
 
 
-from difftmm.film_solver_isotropic import IncoherentIsotropicFilmSolver  # noqa: E402
+from difftmm.film_solver_incoherent import IncoherentIsotropicFilmSolver  # noqa: E402
 
 
 def test_incoherent_solver_class_matches_functional_api():
