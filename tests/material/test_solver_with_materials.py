@@ -101,3 +101,18 @@ class TestIsotropicCheckpoint:
         )
         solver.save_ckpt(path)
         solver.load_ckpt(path)
+
+
+class TestAnisotropicSolverIsotropicInputs:
+    def test_string_inputs_isotropic_path(self, cpu):
+        solver = FilmSolver(
+            mat_n_in="air",
+            mat_n_out="N-BK7",
+            mat_n_ls=["TiO2", "SiO2"],
+            thickness_ls=[0.06, 0.10],
+            device=cpu,
+        )
+        ts, tp, rs, rp = solver.simulate(
+            theta=torch.tensor([0.0]), wvln=torch.tensor([0.55])
+        )
+        assert ts.shape == (1, 1, 1)
