@@ -132,47 +132,55 @@ def EnterExitMatrix_AOIAz(eps_in, eps_out, theta_in, theta_out):
     return T_0, T_N_inv
 
 
-def EnterExitMatrix_XY(eps_in, eps_out, theta_in_2d, theta_out_2d):
-    """Calculate enter and exit matrices for XY configuration."""
-    device = theta_in_2d.device
+def EnterExitMatrix_XY(eps_in, eps_out, theta_in_3d, theta_out_3d):
+    """Calculate enter and exit matrices for XY configuration with wvln axis.
 
-    batchsize = theta_in_2d.shape[0]
-    size_1 = theta_in_2d.size()[1]
-    size_2 = theta_in_2d.size()[2]
-    T_0_4d = torch.zeros((batchsize, size_1, size_2, 4, 4), dtype=torch.complex64).to(
-        device
+    Args:
+        eps_in:  (batch, num_wv, 1, 1) or scalar — incident-medium permittivity per wvln.
+        eps_out: (batch, num_wv, 1, 1) or scalar — output-medium permittivity per wvln.
+        theta_in_3d:  (batch, num_wv, num_x, num_y) — AOI angle.
+        theta_out_3d: (batch, num_wv, num_x, num_y) — AOI angle.
+
+    Returns:
+        T_0_5d, T_N_inv_5d: each (batch, num_wv, num_x, num_y, 4, 4) complex.
+    """
+    device = theta_in_3d.device
+    batchsize, num_wv, num_x, num_y = theta_in_3d.shape
+
+    T_0_5d = torch.zeros(
+        (batchsize, num_wv, num_x, num_y, 4, 4), dtype=torch.complex64, device=device
     )
-    T_N_inv_4d = torch.zeros(
-        (batchsize, size_1, size_2, 4, 4), dtype=torch.complex64
-    ).to(device)
+    T_N_inv_5d = torch.zeros(
+        (batchsize, num_wv, num_x, num_y, 4, 4), dtype=torch.complex64, device=device
+    )
 
     er_in = eps_in
-    erz_in_2d = torch.pow(torch.cos((theta_in_2d)), 2) * eps_in
-    serz_in_2d = torch.sqrt(erz_in_2d)
+    erz_in = torch.pow(torch.cos(theta_in_3d), 2) * eps_in
+    serz_in = torch.sqrt(erz_in)
 
-    T_0_4d[:, :, :, 0, 0] = 1
-    T_0_4d[:, :, :, 0, 2] = 1
-    T_0_4d[:, :, :, 1, 0] = er_in / serz_in_2d
-    T_0_4d[:, :, :, 1, 2] = -er_in / serz_in_2d
-    T_0_4d[:, :, :, 2, 1] = 1
-    T_0_4d[:, :, :, 2, 3] = 1
-    T_0_4d[:, :, :, 3, 1] = serz_in_2d
-    T_0_4d[:, :, :, 3, 3] = -serz_in_2d
+    T_0_5d[..., 0, 0] = 1
+    T_0_5d[..., 0, 2] = 1
+    T_0_5d[..., 1, 0] = er_in / serz_in
+    T_0_5d[..., 1, 2] = -er_in / serz_in
+    T_0_5d[..., 2, 1] = 1
+    T_0_5d[..., 2, 3] = 1
+    T_0_5d[..., 3, 1] = serz_in
+    T_0_5d[..., 3, 3] = -serz_in
 
     er_out = eps_out
-    erz_out_2d = torch.pow(torch.cos((theta_out_2d)), 2) * eps_out
-    serz_out_2d = torch.sqrt(erz_out_2d)
+    erz_out = torch.pow(torch.cos(theta_out_3d), 2) * eps_out
+    serz_out = torch.sqrt(erz_out)
 
-    T_N_inv_4d[:, :, :, 0, 0] = 1 / 2.0
-    T_N_inv_4d[:, :, :, 0, 1] = serz_out_2d / er_out / 2.0
-    T_N_inv_4d[:, :, :, 1, 2] = 1 / 2.0
-    T_N_inv_4d[:, :, :, 1, 3] = 1 / serz_out_2d / 2.0
-    T_N_inv_4d[:, :, :, 2, 0] = 1 / 2.0
-    T_N_inv_4d[:, :, :, 2, 1] = -serz_out_2d / er_out / 2.0
-    T_N_inv_4d[:, :, :, 3, 2] = 1 / 2.0
-    T_N_inv_4d[:, :, :, 3, 3] = -1 / serz_out_2d / 2.0
+    T_N_inv_5d[..., 0, 0] = 1 / 2.0
+    T_N_inv_5d[..., 0, 1] = serz_out / er_out / 2.0
+    T_N_inv_5d[..., 1, 2] = 1 / 2.0
+    T_N_inv_5d[..., 1, 3] = 1 / serz_out / 2.0
+    T_N_inv_5d[..., 2, 0] = 1 / 2.0
+    T_N_inv_5d[..., 2, 1] = -serz_out / er_out / 2.0
+    T_N_inv_5d[..., 3, 2] = 1 / 2.0
+    T_N_inv_5d[..., 3, 3] = -1 / serz_out / 2.0
 
-    return T_0_4d, T_N_inv_4d
+    return T_0_5d, T_N_inv_5d
 
 
 def create_eps_matrix_AOIAz(a_2d, n_2d, Az_1d):
@@ -265,37 +273,38 @@ def create_eps_matrix_AOIAz(a_2d, n_2d, Az_1d):
     return eps_4d
 
 
-def create_eps_matrix_XY(a_2d, n_2d, Az_2d):
-    """
-    Create epsilon matrix used in simulation for XY configuration.
-
-    Optimized: Fully vectorized without loops.
+def create_eps_matrix_XY(a_2d, n_2d_w, Az_2d):
+    """Create epsilon matrix used in simulation for XY configuration.
 
     Args:
         a_2d: azimuth angle of materials in each layer, shape (batchsize, n_layer, 3). Complex.
-        n_2d: refractive index of each layer, shape (batchsize, n_layer, 3). Complex.
-        Az_2d: azimuth, zenith angle of incident light, shape (batchsize, n_angles, n_zenith). Real.
+        n_2d_w: refractive index of each layer per wavelength,
+                shape (batch, num_wv, n_layer, 3). Complex.
+        Az_2d: azimuth, zenith angle of incident light, shape (batchsize, n_x, n_y). Real.
 
     Returns:
-        eps_5d: epsilon tensor for all layers, shape (batchsize, n_aoi, n_az, n_layers, 3, 3). Complex
+        eps_6d: epsilon tensor for all layers, shape (batch, num_wv, n_x, n_y, n_layer, 3, 3). Complex.
     """
     device = a_2d.device
-    batchsize = Az_2d.shape[0]
-    num_layer = a_2d.size()[1]
-    num_x = Az_2d.size()[1]
-    num_y = Az_2d.size()[2]
+    batchsize, num_wv, num_layer, _ = n_2d_w.shape
+    num_x = Az_2d.size(1)
+    num_y = Az_2d.size(2)
 
-    # Expand a_2d to (batchsize, num_x, num_y, num_layer, 3)
-    # a_2d is (batchsize, num_layer, 3)
-    a_2d_exp = a_2d.unsqueeze(1).unsqueeze(2).expand(-1, num_x, num_y, -1, -1)
+    # a_2d is (batch, num_layer, 3) — no wvln dependence
+    # Expand to (batch, num_wv, num_x, num_y, num_layer, 3)
+    a_2d_exp = (
+        a_2d.unsqueeze(1).unsqueeze(2).unsqueeze(3)
+        .expand(-1, num_wv, num_x, num_y, -1, -1)
+    )
+    # Az_2d: (batch, num_x, num_y), expand to (batch, num_wv, num_x, num_y, num_layer)
+    Az_2d_exp = (
+        Az_2d.unsqueeze(1).unsqueeze(-1)
+        .expand(-1, num_wv, -1, -1, num_layer)
+    )
 
-    # Az_2d is (batchsize, num_x, num_y), expand to (batchsize, num_x, num_y, num_layer)
-    Az_2d_exp = Az_2d.unsqueeze(-1).expand(-1, -1, -1, num_layer)
-
-    # Compute phi_medium: (batchsize, num_x, num_y, num_layer)
-    phi_medium = a_2d_exp[:, :, :, :, 0] + Az_2d_exp + torch.pi / 2
-    theta_medium = a_2d_exp[:, :, :, :, 1] + torch.pi / 2
-    psi_medium = a_2d_exp[:, :, :, :, 2] + torch.pi / 2
+    phi_medium = a_2d_exp[..., 0] + Az_2d_exp + torch.pi / 2
+    theta_medium = a_2d_exp[..., 1] + torch.pi / 2
+    psi_medium = a_2d_exp[..., 2] + torch.pi / 2
 
     cos_theta = torch.cos(theta_medium)
     sin_theta = torch.sin(theta_medium)
@@ -311,28 +320,23 @@ def create_eps_matrix_XY(a_2d, n_2d, Az_2d):
     c2 = sin_psi * cos_theta
     c3 = sin_theta
 
-    # Compute n^2 once and expand: n_2d is (batchsize, num_layer, 3)
-    # Result shape: (batchsize, 1, 1, num_layer)
+    # n_2d_w is (batch, num_wv, num_layer, 3)
     nx2 = (
-        n_2d[:, :, 0].real ** 2
-        - n_2d[:, :, 0].imag ** 2
-        + 2 * n_2d[:, :, 0].real * n_2d[:, :, 0].imag * 1j
+        n_2d_w[..., 0].real ** 2 - n_2d_w[..., 0].imag ** 2
+        + 2j * n_2d_w[..., 0].real * n_2d_w[..., 0].imag
     )
     ny2 = (
-        n_2d[:, :, 1].real ** 2
-        - n_2d[:, :, 1].imag ** 2
-        + 2 * n_2d[:, :, 1].real * n_2d[:, :, 1].imag * 1j
+        n_2d_w[..., 1].real ** 2 - n_2d_w[..., 1].imag ** 2
+        + 2j * n_2d_w[..., 1].real * n_2d_w[..., 1].imag
     )
     nz2 = (
-        n_2d[:, :, 2].real ** 2
-        - n_2d[:, :, 2].imag ** 2
-        + 2 * n_2d[:, :, 2].real * n_2d[:, :, 2].imag * 1j
+        n_2d_w[..., 2].real ** 2 - n_2d_w[..., 2].imag ** 2
+        + 2j * n_2d_w[..., 2].real * n_2d_w[..., 2].imag
     )
-
-    # Expand to (batchsize, num_x, num_y, num_layer)
-    nx2 = nx2.unsqueeze(1).unsqueeze(2).expand(-1, num_x, num_y, -1)
-    ny2 = ny2.unsqueeze(1).unsqueeze(2).expand(-1, num_x, num_y, -1)
-    nz2 = nz2.unsqueeze(1).unsqueeze(2).expand(-1, num_x, num_y, -1)
+    # Each is (batch, num_wv, num_layer); expand to (batch, num_wv, num_x, num_y, num_layer)
+    nx2 = nx2.unsqueeze(2).unsqueeze(3).expand(-1, -1, num_x, num_y, -1)
+    ny2 = ny2.unsqueeze(2).unsqueeze(3).expand(-1, -1, num_x, num_y, -1)
+    nz2 = nz2.unsqueeze(2).unsqueeze(3).expand(-1, -1, num_x, num_y, -1)
 
     exx = nx2 + (ny2 - nx2) * a2**2 + (nz2 - nx2) * a3**2
     eyy = nx2 + (ny2 - nx2) * b2**2 + (nz2 - nx2) * b3**2
@@ -341,21 +345,20 @@ def create_eps_matrix_XY(a_2d, n_2d, Az_2d):
     exz = (ny2 - nx2) * a2 * c2 + (nz2 - nx2) * a3 * c3
     eyz = (ny2 - nx2) * c2 * b2 + (nz2 - nx2) * b3 * c3
 
-    # Stack into eps_5d: (batchsize, num_x, num_y, num_layer, 3, 3)
-    eps_5d = torch.zeros(
-        (batchsize, num_x, num_y, num_layer, 3, 3), dtype=torch.complex64, device=device
+    eps_6d = torch.zeros(
+        (batchsize, num_wv, num_x, num_y, num_layer, 3, 3),
+        dtype=torch.complex64, device=device,
     )
-    eps_5d[:, :, :, :, 0, 0] = exx
-    eps_5d[:, :, :, :, 0, 1] = exy
-    eps_5d[:, :, :, :, 0, 2] = exz
-    eps_5d[:, :, :, :, 1, 0] = exy  # eyx = exy
-    eps_5d[:, :, :, :, 1, 1] = eyy
-    eps_5d[:, :, :, :, 1, 2] = eyz
-    eps_5d[:, :, :, :, 2, 0] = exz  # ezx = exz
-    eps_5d[:, :, :, :, 2, 1] = eyz  # ezy = eyz
-    eps_5d[:, :, :, :, 2, 2] = ezz
-
-    return eps_5d
+    eps_6d[..., 0, 0] = exx
+    eps_6d[..., 0, 1] = exy
+    eps_6d[..., 0, 2] = exz
+    eps_6d[..., 1, 0] = exy
+    eps_6d[..., 1, 1] = eyy
+    eps_6d[..., 1, 2] = eyz
+    eps_6d[..., 2, 0] = exz
+    eps_6d[..., 2, 1] = eyz
+    eps_6d[..., 2, 2] = ezz
+    return eps_6d
 
 
 def create_jones_matrix_AOIAz(
@@ -369,11 +372,15 @@ def create_jones_matrix_AOIAz(
 
     Args:
         a_2d: azimuth angle of materials in each layer, shape (batchsize, n_layer, 3). Complex.
-        n_2d: refractive index of each layer, shape (batchsize, n_layer, 3). Complex.
+        n_2d: refractive index of each layer. Accepts:
+              - 3-D shape (batchsize, n_layer, 3): non-dispersive, broadcast across wvlns.
+              - 4-D shape (batchsize, num_wv, n_layer, 3): dispersive per wavelength.
+              Complex.
         d_1d: thicknesses of all layers, shape (batchsize, n_layer). Complex.
         wv_1d: wavelengths of simulations, shape (batchsize, n_wls). Real
-        n_in: incident media refractive index
-        n_out: transmit media refractive index
+        n_in: incident media refractive index. Accepts Python scalar or tensor of
+              shape (batchsize, num_wv) for per-wavelength values.
+        n_out: transmit media refractive index. Same accepted shapes as n_in.
         theta_x_1d: incident Zenith angle, shape (batchsize, n_aoi_angles). Real
         theta_y_1d: azimuth angle of incident light, shape (batchsize, n_az_angles). Real.
 
@@ -388,6 +395,16 @@ def create_jones_matrix_AOIAz(
     num_y = theta_y_1d.size()[1]
     num_layer = d_1d.size()[1]
 
+    # Normalize n_2d to (batch, num_wv, n_layer, 3)
+    if n_2d.dim() == 3:
+        # (batch, n_layer, 3) — broadcast across wvlns
+        n_2d_w = n_2d.unsqueeze(1).expand(-1, num_wv, -1, -1)
+    elif n_2d.dim() == 4:
+        # (batch, num_wv, n_layer, 3) — already dispersive
+        n_2d_w = n_2d
+    else:
+        raise ValueError(f"n_2d must be 3-D or 4-D, got shape {n_2d.shape}")
+
     # Vectorized AOI and Az calculation (no loops)
     # theta_x_1d: (batchsize, num_x), theta_y_1d: (batchsize, num_y)
     # AOI_2d: (batchsize, num_x, num_y) - broadcast theta_x over y dimension
@@ -396,37 +413,59 @@ def create_jones_matrix_AOIAz(
     Az_2d = theta_y_1d.unsqueeze(1).expand(-1, num_x, -1).to(torch.float64)
 
     k0_1d = 2 * torch.pi / wv_1d
-    ng_1d = torch.sqrt(
-        (n_2d[:, :, 0] ** 2 + n_2d[:, :, 1] ** 2 + n_2d[:, :, 2] ** 2) / 3
+    # ng has shape (batch, num_wv, n_layer)
+    ng_4d = torch.sqrt(
+        (n_2d_w[..., 0] ** 2 + n_2d_w[..., 1] ** 2 + n_2d_w[..., 2] ** 2) / 3
     )
-    eps_in = n_in**2
-    eps_out = n_out**2
 
-    theta_inc_air_2d = AOI_2d
+    # n_in / n_out: scalar or shape (batch, num_wv). Build (batch, num_wv, 1, 1) eps.
+    def _per_wvln(x):
+        if torch.is_tensor(x) and x.dim() == 2:
+            return (x ** 2).to(torch.complex64).unsqueeze(-1).unsqueeze(-1)
+        return torch.tensor(complex(x) ** 2, dtype=torch.complex64, device=device).view(1, 1, 1, 1)
+
+    eps_in = _per_wvln(n_in)
+    eps_out = _per_wvln(n_out)
+
+    # For the per-wvln Snell/AOI, also compute per-wvln n_in / n_out scalars
+    # ready for broadcasting into the (batch, num_wv, num_x, num_y) theta grid.
+    def _n_per_wvln(x):
+        if torch.is_tensor(x) and x.dim() == 2:
+            return x.to(torch.complex64).unsqueeze(-1).unsqueeze(-1)
+        return torch.tensor(complex(x), dtype=torch.complex64, device=device).view(1, 1, 1, 1)
+
+    n_in_4d = _n_per_wvln(n_in)   # (batch, num_wv, 1, 1) or (1,1,1,1)
+    n_out_4d = _n_per_wvln(n_out)
+
+    # theta inputs to EnterExitMatrix_XY are 4-D
+    AOI_3d = AOI_2d.unsqueeze(1).expand(-1, num_wv, -1, -1)  # (batch, num_wv, num_x, num_y)
+    theta_inc_air_3d = AOI_3d
     # Use complex_arcsin to properly handle evanescent waves beyond critical angle
-    theta_inc_sub_2d = complex_arcsin(n_in * torch.sin(AOI_2d) / n_out)
+    theta_inc_sub_3d = complex_arcsin(n_in_4d * torch.sin(AOI_3d) / n_out_4d)
 
-    ng_3d = ng_1d.reshape((batchsize, 1, 1, -1)).expand(-1, num_x, num_y, -1)
-    AOI_3d = AOI_2d.unsqueeze(-1).expand(-1, -1, -1, num_layer)
+    # ng_5d shape: (batch, num_wv, num_x, num_y, n_layer)
+    ng_5d = ng_4d.unsqueeze(2).unsqueeze(3).expand(-1, -1, num_x, num_y, -1)
+    # AOI_4d: (batch, num_wv, num_x, num_y, n_layer)
+    AOI_4d = AOI_2d.unsqueeze(1).unsqueeze(-1).expand(-1, num_wv, -1, -1, num_layer)
 
     # Use complex_arcsin for angles in each layer - critical for TIR handling
-    theta_inc_medium_3d = complex_arcsin(n_in * torch.sin(AOI_3d) / ng_3d)
-    sin_Vt_3d = ng_3d * torch.sin(theta_inc_medium_3d)
+    # n_in_4d is (batch, num_wv, 1, 1); after unsqueeze(-1) becomes (batch, num_wv, 1, 1, 1)
+    # which broadcasts against the layer axis.
+    theta_inc_medium_4d = complex_arcsin(n_in_4d.unsqueeze(-1) * torch.sin(AOI_4d) / ng_5d)
+    sin_Vt_4d = ng_5d * torch.sin(theta_inc_medium_4d)
 
-    eps_5d = create_eps_matrix_XY(a_2d, n_2d, Az_2d)
+    eps_6d = create_eps_matrix_XY(a_2d, n_2d_w, Az_2d)
 
-    # Extract epsilon components and expand for wavelengths
-    exx_4d = eps_5d[:, :, :, :, 0, 0].unsqueeze(1).expand(-1, num_wv, -1, -1, -1)
-    exy_4d = eps_5d[:, :, :, :, 0, 1].unsqueeze(1).expand(-1, num_wv, -1, -1, -1)
-    exz_4d = eps_5d[:, :, :, :, 0, 2].unsqueeze(1).expand(-1, num_wv, -1, -1, -1)
-    eyx_4d = eps_5d[:, :, :, :, 1, 0].unsqueeze(1).expand(-1, num_wv, -1, -1, -1)
-    eyy_4d = eps_5d[:, :, :, :, 1, 1].unsqueeze(1).expand(-1, num_wv, -1, -1, -1)
-    eyz_4d = eps_5d[:, :, :, :, 1, 2].unsqueeze(1).expand(-1, num_wv, -1, -1, -1)
-    ezx_4d = eps_5d[:, :, :, :, 2, 0].unsqueeze(1).expand(-1, num_wv, -1, -1, -1)
-    ezy_4d = eps_5d[:, :, :, :, 2, 1].unsqueeze(1).expand(-1, num_wv, -1, -1, -1)
-    ezz_4d = eps_5d[:, :, :, :, 2, 2].unsqueeze(1).expand(-1, num_wv, -1, -1, -1)
-
-    sin_Vt_4d = sin_Vt_3d.unsqueeze(1).expand(-1, num_wv, -1, -1, -1)
+    # Extract epsilon components — each (batch, num_wv, num_x, num_y, num_layer)
+    exx_4d = eps_6d[..., 0, 0]
+    exy_4d = eps_6d[..., 0, 1]
+    exz_4d = eps_6d[..., 0, 2]
+    eyx_4d = eps_6d[..., 1, 0]
+    eyy_4d = eps_6d[..., 1, 1]
+    eyz_4d = eps_6d[..., 1, 2]
+    ezx_4d = eps_6d[..., 2, 0]
+    ezy_4d = eps_6d[..., 2, 1]
+    ezz_4d = eps_6d[..., 2, 2]
 
     # Build Q matrix for all layers at once
     Q_6d = torch.zeros(
@@ -462,12 +501,10 @@ def create_jones_matrix_AOIAz(
     for i_layer in range(1, num_layer):
         P_5d = torch.matmul(Pn_all[:, :, :, :, i_layer, :, :], P_5d)
 
-    T0_4d, T_N_inv_4d = EnterExitMatrix_XY(
-        eps_in, eps_out, theta_inc_air_2d, theta_inc_sub_2d
+    T0_5d, T_N_inv_5d = EnterExitMatrix_XY(
+        eps_in, eps_out, theta_inc_air_3d, theta_inc_sub_3d
     )
 
-    T_N_inv_5d = T_N_inv_4d.unsqueeze(1).expand(-1, num_wv, -1, -1, -1, -1)
-    T0_5d = T0_4d.unsqueeze(1).expand(-1, num_wv, -1, -1, -1, -1)
     N_5d = torch.matmul(torch.matmul(T_N_inv_5d, P_5d), T0_5d)
 
     N11_5d = N_5d[:, :, :, :, :2, :2]
