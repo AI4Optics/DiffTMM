@@ -211,6 +211,7 @@ The isotropic 2x2 solver uses ~23x less GPU memory than the anisotropic 4x4 solv
 ├── 1_forward_simu.ipynb                # Example: forward simulation
 ├── 2_inverse_design.ipynb              # Example: differentiable inverse design
 ├── 3_real_materials.ipynb              # Example: real materials
+├── 4_incoherent_film.ipynb             # Example: incoherent / thick-substrate solver
 ├── tmm_numpy/                          # Reference NumPy TMM library
 ├── benchmarks/                         # Accuracy and performance benchmarks
 ├── tests/                              # Pytest suite
