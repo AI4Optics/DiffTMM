@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "difftmm"
-version = "0.1.2"
+version = "0.2.0"
 description = "Differentiable transfer matrix method (TMM) in PyTorch for multi-layer thin film optics — supports anisotropic media, GPU batching, and gradient-based inverse design."
 readme = "README.md"
 license = { file = "LICENSE" }
