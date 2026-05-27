@@ -559,21 +559,20 @@ class IsotropicFilmSolver:
 
         return film_thickness
 
-    def simulate(self, theta, wvln):
-        """
-        Calculate (ts, tp, rs, rp) using TMM for specified angles and wavelengths.
+    def _prepare_simulate_inputs(self, theta, wvln):
+        """Normalize theta/wvln user inputs and return the tensors simulate() needs.
 
         Args:
-            theta: Incident angles in radians. Can be:
-                   - 1D tensor of shape (n_angles,): same angles for all mirrors
-                   - 2D tensor of shape (batch_size, n_angles): different angles per film stack
-            wvln: Wavelengths in micrometers. Can be:
-                  - List or 1D tensor of shape (n_wvlns,)
-                  - Scalar or 0D tensor: single wavelength
+            theta: angles in radians; same accepted forms as simulate().
+            wvln:  wavelengths in um; same accepted forms as simulate().
 
         Returns:
-            ts, tp, rs, rp: Complex transmission/reflection coefficients.
-                           Shape: (batch_size, n_wvlns, n_angles)
+            theta:      (batch_size, n_angles) float tensor on self.device.
+            wv_batch:   (batch_size, n_wvlns) float tensor on self.device.
+            d_batch:    (batch_size, num_layers) float tensor — current film thicknesses.
+            n_in_t:     (batch_size, n_wvlns) tensor — incident-medium refractive index per wavelength.
+            n_out_t:    (batch_size, n_wvlns) tensor — exit-medium refractive index per wavelength.
+            n_layers_t: (batch_size, n_wvlns, num_layers) tensor — per-layer refractive index per wavelength.
         """
         if not torch.is_tensor(theta):
             theta = torch.tensor(theta, dtype=torch.float32, device=self.device)
@@ -598,6 +597,26 @@ class IsotropicFilmSolver:
         n_layers_t = n_layers_t.unsqueeze(0).expand(self.batch_size, -1, -1)
 
         d_batch = self.get_film_thickness()
+        return theta, wv_batch, d_batch, n_in_t, n_out_t, n_layers_t
+
+    def simulate(self, theta, wvln):
+        """Calculate (ts, tp, rs, rp) using TMM for specified angles and wavelengths.
+
+        Args:
+            theta: Incident angles in radians. Can be:
+                   - 1D tensor of shape (n_angles,): same angles for all mirrors
+                   - 2D tensor of shape (batch_size, n_angles): different angles per film stack
+            wvln: Wavelengths in micrometers. Can be:
+                  - List or 1D tensor of shape (n_wvlns,)
+                  - Scalar or 0D tensor: single wavelength
+
+        Returns:
+            ts, tp, rs, rp: Complex transmission/reflection coefficients.
+                           Shape: (batch_size, n_wvlns, n_angles)
+        """
+        theta, wv_batch, d_batch, n_in_t, n_out_t, n_layers_t = (
+            self._prepare_simulate_inputs(theta, wvln)
+        )
         ts, tp, rs, rp = create_jones_matrix_isotropic(
             n_layers_t, d_batch, wv_batch, n_in_t, n_out_t, theta
         )

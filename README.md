@@ -128,6 +128,45 @@ a `(mat_x, mat_y, mat_z)` tuple per layer.
 Dispersion models supported in v1: **Sellmeier** (analytical, real n) and
 **linear interpolation** (lookup tables, complex n + ik).
 
+## Incoherent Layers (thick substrates)
+
+For stacks containing layers thicker than the source's coherence length
+(typically anything thicker than ~10 μm for broadband illumination), the
+fully-coherent calculation produces dense Fabry-Perot ripples that do not
+appear in real measurements. The `IncoherentIsotropicFilmSolver` lets you
+mark individual layers as incoherent (`'i'`) while keeping thin films
+coherent (`'c'`):
+
+```python
+import torch
+from difftmm import IncoherentIsotropicFilmSolver
+
+# Stack: air | 100 nm TiO2 | 1 mm glass | air
+solver = IncoherentIsotropicFilmSolver(
+    mat_in=1.0,
+    mat_out=1.0,
+    mat_ls=[2.40, 1.52],
+    c_list=["c", "i"],           # TiO2 coherent, glass incoherent
+    thickness_ls=[0.100, 1000.0],
+    device=torch.device("cuda"),
+)
+Rs, Rp, Ts, Tp = solver.simulate(
+    theta=torch.tensor([0.0]),
+    wvln=[0.55],
+)
+# Returns real power coefficients in [0, 1].
+```
+
+`c_list` is per-interior-layer; the two semi-infinite media are always
+treated as incoherent. The coherent path (`IsotropicFilmSolver`) and the
+incoherent path (`IncoherentIsotropicFilmSolver`) share the same forward
+mathematics for coherent stacks, so an all-`'c'` `c_list` (with
+incoherent semi-infinite endpoints) produces results consistent with the
+coherent solver up to the loss of complex phase.
+
+Only the 2x2 isotropic solver supports incoherent layers today.
+Anisotropic incoherent TMM is tracked as future work.
+
 ## Accuracy Validation
 
 Validated against the reference NumPy TMM library ([sbyrnes321/tmm](https://github.com/sbyrnes321/tmm)) on surface plasmon resonance (SPR) calculations:
@@ -164,6 +203,7 @@ The isotropic 2x2 solver uses ~23x less GPU memory than the anisotropic 4x4 solv
 │   ├── __init__.py                     #   Public API
 │   ├── film_solver_isotropic.py        #   2x2 isotropic solver (fast)
 │   ├── film_solver_anisotropic.py      #   4x4 anisotropic solver (general)
+│   ├── film_solver_incoherent.py       #   2x2 isotropic solver with incoherent layers
 │   └── material/                       #   Wavelength-dependent materials
 │       ├── __init__.py
 │       ├── materials.py                #     Material class and catalog loaders
@@ -174,7 +214,8 @@ The isotropic 2x2 solver uses ~23x less GPU memory than the anisotropic 4x4 solv
 ├── tmm_numpy/                          # Reference NumPy TMM library
 ├── benchmarks/                         # Accuracy and performance benchmarks
 ├── tests/                              # Pytest suite
-├── pyproject.toml
+├── pyproject.toml                      # Packaging metadata
+├── CITATION.cff                        # Citation metadata
 └── README.md
 ```
 
