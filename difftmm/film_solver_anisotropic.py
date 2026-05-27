@@ -8,9 +8,9 @@ autograd support.
 Copyright (c) 2026, Xinge Yang, Qingyuan Fan, Zhaocheng Liu.
 """
 
-import os
-
 import torch
+
+from .material import _deserialize_spec, _serialize_spec
 
 
 # =========================
@@ -19,30 +19,6 @@ import torch
 def inv_sigmoid(x):
     """Inverse sigmoid function."""
     return torch.log(x / (1 - x))
-
-
-def _serialize_spec(spec):
-    """Serialize one refractive-index spec to a checkpoint-safe value."""
-    from .material import Material
-
-    if isinstance(spec, Material):
-        return spec.name
-    if isinstance(spec, tuple):
-        return tuple(_serialize_spec(s) for s in spec)
-    if isinstance(spec, (int, float, complex)):
-        return complex(spec)
-    raise TypeError(f"Cannot serialize spec of type {type(spec).__name__}")
-
-
-def _deserialize_spec(value, device):
-    """Inverse of _serialize_spec — rewraps strings as Material(name)."""
-    from .material import Material
-
-    if isinstance(value, str):
-        return Material(value, device=device)
-    if isinstance(value, tuple):
-        return tuple(_deserialize_spec(v, device) for v in value)
-    return value
 
 
 def complex_arcsin(x):

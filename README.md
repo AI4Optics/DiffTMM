@@ -32,10 +32,10 @@ from difftmm import IsotropicFilmSolver
 
 # Define film stack: Glass | Ta2O5 | SiO2 | Ta2O5 | Glass
 solver = IsotropicFilmSolver(
-    n_in=1.5,                         # incident medium
-    n_out=1.5,                        # exit medium
-    n_layers_list=[2.10, 1.46, 2.10], # interior layer indices
-    d_layers=[0.080, 0.120, 0.080],   # thicknesses in um
+    mat_n_in=1.5,                         # incident medium
+    mat_n_out=1.5,                        # exit medium
+    mat_n_ls=[2.10, 1.46, 2.10],          # interior layer indices
+    thickness_ls=[0.080, 0.120, 0.080],   # thicknesses in um
     device=torch.device("cuda"),
 )
 
@@ -91,10 +91,10 @@ Both solvers share the same API:
 
 ```python
 solver = Solver(
-    n_in=1.0,                  # incident medium refractive index
-    n_out=1.52,                # exit medium refractive index
-    n_layers_list=[2.1, 1.46], # interior layer refractive indices
-    d_layers=[0.08, 0.12],     # thicknesses in um (optional, random if None)
+    mat_n_in=1.0,                  # incident medium refractive index
+    mat_n_out=1.52,                # exit medium refractive index
+    mat_n_ls=[2.1, 1.46],          # interior layer refractive indices
+    thickness_ls=[0.08, 0.12],     # thicknesses in um (optional, random if None)
     device=torch.device("cuda"),
 )
 ts, tp, rs, rp = solver.simulate(theta, wvln)

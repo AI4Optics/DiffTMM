@@ -293,6 +293,31 @@ class Material:
         return self.ior(wvln)
 
 
+def _serialize_spec(spec):
+    """Serialize one refractive-index spec to a checkpoint-safe value.
+
+    Material → its lowercase name (str); scalar → complex; 3-tuple → tuple of
+    the above (anisotropic; not used by the isotropic solver but supported for
+    symmetry).
+    """
+    if isinstance(spec, Material):
+        return spec.name
+    if isinstance(spec, tuple):
+        return tuple(_serialize_spec(s) for s in spec)
+    if isinstance(spec, (int, float, complex)):
+        return complex(spec)
+    raise TypeError(f"Cannot serialize spec of type {type(spec).__name__}")
+
+
+def _deserialize_spec(value, device):
+    """Inverse of _serialize_spec — rewraps strings as Material(name)."""
+    if isinstance(value, str):
+        return Material(value, device=device)
+    if isinstance(value, tuple):
+        return tuple(_deserialize_spec(v, device) for v in value)
+    return value
+
+
 def resolve_indices(
     spec,
     wvln: torch.Tensor,

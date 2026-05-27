@@ -7,9 +7,9 @@ for multi-layer film stacks with full autograd support.
 Copyright (c) 2026, Xinge Yang, Qingyuan Fan, Zhaocheng Liu.
 """
 
-import os
-
 import torch
+
+from .material import _deserialize_spec, _serialize_spec
 
 
 # =========================
@@ -18,35 +18,6 @@ import torch
 def inv_sigmoid(x):
     """Inverse sigmoid function."""
     return torch.log(x / (1 - x))
-
-
-def _serialize_spec(spec):
-    """Serialize one refractive-index spec to a checkpoint-safe value.
-
-    Material → its lowercase name (str); scalar → complex; 3-tuple → tuple of
-    the above (anisotropic; not used by the isotropic solver but supported for
-    symmetry).
-    """
-    from .material import Material
-
-    if isinstance(spec, Material):
-        return spec.name
-    if isinstance(spec, tuple):
-        return tuple(_serialize_spec(s) for s in spec)
-    if isinstance(spec, (int, float, complex)):
-        return complex(spec)
-    raise TypeError(f"Cannot serialize spec of type {type(spec).__name__}")
-
-
-def _deserialize_spec(value, device):
-    """Inverse of _serialize_spec — rewraps strings as Material(name)."""
-    from .material import Material
-
-    if isinstance(value, str):
-        return Material(value, device=device)
-    if isinstance(value, tuple):
-        return tuple(_deserialize_spec(v, device) for v in value)
-    return value
 
 
 @torch.jit.script
@@ -503,17 +474,6 @@ class IsotropicFilmSolver:
         self._n_layer_specs = normalized_specs
         self.num_layers = len(normalized_specs)
 
-        all_scalar = all(
-            isinstance(s, (int, float, complex)) for s in self._n_layer_specs
-        )
-        if all_scalar:
-            t = torch.tensor(
-                [complex(s) for s in self._n_layer_specs], dtype=torch.complex64
-            )
-            self.refract_idx_layers = t.unsqueeze(0).expand(batch_size, -1).clone()
-        else:
-            self.refract_idx_layers = None
-
         self.mat_n_in = (
             float(mat_n_in)
             if isinstance(mat_n_in, (int, float)) and not isinstance(mat_n_in, bool)
@@ -549,8 +509,6 @@ class IsotropicFilmSolver:
         """Move tensors to specified device."""
         self.device = device
         self.film_params = self.film_params.to(device, non_blocking=True)
-        if self.refract_idx_layers is not None:
-            self.refract_idx_layers = self.refract_idx_layers.to(device, non_blocking=True)
         return self
 
     def load_ckpt(self, ckpt_path):
@@ -592,11 +550,6 @@ class IsotropicFilmSolver:
             "layer_specs": [_serialize_spec(s) for s in self._n_layer_specs],
             "n_in":  self.mat_n_in,
             "n_out": self.mat_n_out,
-            "refract_idx_layers": (
-                self.refract_idx_layers.cpu()
-                if self.refract_idx_layers is not None
-                else None
-            ),
         }
         torch.save(payload, save_path)
 
