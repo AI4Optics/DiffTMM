@@ -1,0 +1,26 @@
+{
+  "_info": {
+    "INTERP_NK_TABLE": "Wavelength (um), refractive index n, extinction coefficient k. References: https://refractiveindex.info/.",
+    "schema_version": 1
+  },
+  "INTERP_NK_TABLE": {
+    "SiO2": {
+      "_source": "Malitson 1965, https://refractiveindex.info/?shelf=main&book=SiO2&page=Malitson",
+      "wvlns": [0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80],
+      "n":     [1.4701, 1.4656, 1.4623, 1.4601, 1.4580, 1.4565, 1.4553, 1.4542, 1.4533],
+      "k":     [0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0]
+    },
+    "TiO2": {
+      "_source": "Sarkar 2019 (rutile), https://refractiveindex.info/?shelf=main&book=TiO2&page=Sarkar",
+      "wvlns": [0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80],
+      "n":     [3.05, 2.78, 2.65, 2.58, 2.54, 2.51, 2.49, 2.47, 2.46],
+      "k":     [0.10, 0.02, 0.005,0.001,0.0,  0.0,  0.0,  0.0,  0.0]
+    },
+    "Ag": {
+      "_source": "Johnson and Christy 1972, https://refractiveindex.info/?shelf=main&book=Ag&page=Johnson",
+      "wvlns": [0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80],
+      "n":     [0.173, 0.141, 0.129, 0.123, 0.124, 0.130, 0.142, 0.157, 0.176],
+      "k":     [1.952, 2.460, 2.880, 3.282, 3.661, 4.030, 4.397, 4.768, 5.139]
+    }
+  }
+}

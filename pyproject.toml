@@ -71,4 +71,7 @@ Paper = "https://arxiv.org/abs/2601.04370"
 
 [tool.setuptools.packages.find]
 include = ["difftmm*"]
-exclude = ["benchmarks*", "tmm_numpy*", "__pycache__*"]
+exclude = ["benchmarks*", "tmm_numpy*", "tests*", "__pycache__*"]
+
+[tool.setuptools.package-data]
+"difftmm.material" = ["catalogs/*.AGF", "catalogs/*.json"]

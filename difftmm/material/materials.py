@@ -1,0 +1,281 @@
+"""Optical material with wavelength-dependent complex refractive index."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+
+import torch
+
+_CATALOGS_DIR = os.path.join(os.path.dirname(__file__), "catalogs")
+
+
+def _read_agf(file_path: str) -> dict:
+    """Parse an AGF catalog and return a dict of Sellmeier (mode=2) entries.
+
+    Schott-mode (mode=1) entries are silently skipped — v1 only supports Sellmeier.
+    """
+    encodings = ("utf-8", "utf-16")
+    lines: list[str] | None = None
+    for enc in encodings:
+        try:
+            with open(file_path, encoding=enc) as f:
+                lines = f.readlines()
+            break
+        except UnicodeDecodeError:
+            continue
+    if lines is None:
+        raise OSError(f"Could not read {file_path} with utf-8 or utf-16.")
+
+    nm_lines = [ln for ln in lines if re.match(r"^NM\b", ln)]
+    cd_lines = [ln for ln in lines if re.match(r"^CD\b", ln)]
+    materials: dict = {}
+    for nm, cd in zip(nm_lines, cd_lines):
+        nm_parts = nm.split()
+        cd_parts = cd.split()
+        mode = float(nm_parts[2])
+        if mode != 2:  # Skip non-Sellmeier
+            continue
+        materials[nm_parts[1].lower()] = {
+            "k1": float(cd_parts[1]),
+            "l1": float(cd_parts[2]),
+            "k2": float(cd_parts[3]),
+            "l2": float(cd_parts[4]),
+            "k3": float(cd_parts[5]),
+            "l3": float(cd_parts[6]),
+            "nd": float(nm_parts[4]),
+            "vd": float(nm_parts[5]),
+        }
+    return materials
+
+
+def _load_all_agf() -> dict:
+    """Merge all AGF Sellmeier entries. Precedence: MISC < PLASTIC < CDGM < SCHOTT."""
+    files = ("MISC.AGF", "PLASTIC2022.AGF", "CDGM.AGF", "SCHOTT.AGF")
+    merged: dict = {}
+    for fname in files:
+        path = os.path.join(_CATALOGS_DIR, fname)
+        if os.path.exists(path):
+            merged.update(_read_agf(path))
+    return merged
+
+
+def _read_json_catalog(file_path: str) -> dict:
+    """Read a JSON catalog file and return its contents as a dict."""
+    if not os.path.exists(file_path):
+        return {}
+    with open(file_path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+_AGF_DATA: dict = _load_all_agf()
+
+_THINFILM_DATA: dict = _read_json_catalog(
+    os.path.join(_CATALOGS_DIR, "thin_film_materials.json")
+)
+# Build a case-insensitive lookup map name_lower -> entry
+_INTERP_NK_TABLE: dict = {
+    k.lower(): v for k, v in _THINFILM_DATA.get("INTERP_NK_TABLE", {}).items()
+}
+
+
+def list_materials() -> list[str]:
+    """Return all known material names from all bundled catalogs (sorted).
+
+    Returns:
+        Sorted list of lowercase material name strings.
+    """
+    names: set[str] = set()
+    names.add("air")
+    names.update(_AGF_DATA.keys())
+    names.update(_INTERP_NK_TABLE.keys())
+    return sorted(names)
+
+
+def _linear_interp_complex(
+    wvln: torch.Tensor,
+    ref_wvlns: torch.Tensor,
+    ref_n: torch.Tensor,
+    ref_k: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Differentiable linear interpolation of (n, k) into complex output.
+
+    Args:
+        wvln: Query wavelengths (μm), shape (...,).
+        ref_wvlns: Sorted table wavelengths, shape (M,).
+        ref_n: Real refractive index at each table point, shape (M,).
+        ref_k: Extinction coefficient at each table point, shape (M,), or None.
+
+    Returns:
+        torch.complex64 tensor with the same shape as `wvln`.
+    """
+    num_pts = ref_wvlns.numel()
+    i = torch.searchsorted(ref_wvlns, wvln, side="right")
+    idx_low = torch.clamp(i - 1, 0, num_pts - 1)
+    idx_high = torch.clamp(i, 0, num_pts - 1)
+
+    w_low = ref_wvlns[idx_low]
+    w_high = ref_wvlns[idx_high]
+    n_low = ref_n[idx_low]
+    n_high = ref_n[idx_high]
+
+    denom = w_high - w_low
+    has_interval = denom != 0
+    safe_denom = torch.where(has_interval, denom, torch.ones_like(denom))
+    weight_high = torch.where(
+        has_interval, (wvln - w_low) / safe_denom, torch.zeros_like(wvln)
+    )
+    weight_low = 1.0 - weight_high
+    n_real = n_low * weight_low + n_high * weight_high
+    if ref_k is not None:
+        k_low = ref_k[idx_low]
+        k_high = ref_k[idx_high]
+        k_real = k_low * weight_low + k_high * weight_high
+    else:
+        k_real = torch.zeros_like(n_real)
+    return torch.complex(n_real, k_real).to(torch.complex64)
+
+
+class Material:
+    """Optical material with wavelength-dependent complex refractive index.
+
+    Attributes:
+        name (str | float | complex): Lowercase material name for catalog materials,
+            or the original numeric value for constant-dispersion materials.
+        dispersion (str): 'sellmeier' | 'interp' | 'constant'.
+        n (float): Nominal refractive index at d-line (587 nm).
+        V (float): Abbe number (1e38 for non-dispersive materials).
+    """
+
+    def __init__(
+        self,
+        name: "str | float | complex | None" = None,
+        device: "torch.device | str" = "cpu",
+    ):
+        self.device = (
+            torch.device(device) if not isinstance(device, torch.device) else device
+        )
+        if isinstance(name, (float, complex)):
+            n = complex(name)
+            self._const_n = n
+            self.name = name
+            self.dispersion = "constant"
+            self.n = n.real
+            self.V = 1e38
+        else:
+            raw = "air" if name is None else name.strip().lower()
+            self.name = raw
+            self._load_dispersion()
+
+    def _load_dispersion(self) -> None:
+        if self.name == "air":
+            self.dispersion = "sellmeier"
+            self.k1 = self.l1 = self.k2 = self.l2 = self.k3 = self.l3 = 0.0
+            self.n = 1.0
+            self.V = 1e38
+            return
+
+        if self.name in _AGF_DATA:
+            entry = _AGF_DATA[self.name]
+            self.dispersion = "sellmeier"
+            self.k1 = entry["k1"]
+            self.l1 = entry["l1"]
+            self.k2 = entry["k2"]
+            self.l2 = entry["l2"]
+            self.k3 = entry["k3"]
+            self.l3 = entry["l3"]
+            self.n = entry["nd"]
+            self.V = entry["vd"]
+            return
+
+        if self.name in _INTERP_NK_TABLE:
+            entry = _INTERP_NK_TABLE[self.name]
+            self.dispersion = "interp"
+            self._ref_wvlns = torch.tensor(entry["wvlns"], dtype=torch.float32)
+            self._ref_n = torch.tensor(entry["n"], dtype=torch.float32)
+            self._ref_k = torch.tensor(entry["k"], dtype=torch.float32)
+            d_wvln = torch.tensor([0.5876])
+            F_wvln = torch.tensor([0.4861])
+            C_wvln = torch.tensor([0.6563])
+            nd = _linear_interp_complex(
+                d_wvln, self._ref_wvlns, self._ref_n
+            ).real.item()
+            nF = _linear_interp_complex(
+                F_wvln, self._ref_wvlns, self._ref_n
+            ).real.item()
+            nC = _linear_interp_complex(
+                C_wvln, self._ref_wvlns, self._ref_n
+            ).real.item()
+            self.n = nd
+            self.V = (nd - 1) / (nF - nC) if nF != nC else 1e38
+            return
+
+        raise NotImplementedError(f"Material {self.name!r} not implemented.")
+
+    def to(self, device: torch.device | str) -> "Material":
+        """Move cached interpolation tensors to the given device.
+
+        Returns self for chaining.
+        """
+        device = (
+            torch.device(device) if not isinstance(device, torch.device) else device
+        )
+        self.device = device
+        if hasattr(self, "_ref_wvlns") and self._ref_wvlns is not None:
+            self._ref_wvlns = self._ref_wvlns.to(device)
+            self._ref_n = self._ref_n.to(device)
+            if self._ref_k is not None:
+                self._ref_k = self._ref_k.to(device)
+        return self
+
+    def ior(self, wvln: torch.Tensor) -> torch.Tensor:
+        """Compute the complex refractive index at given wavelengths.
+
+        The TMM solvers always require complex output — even for lossless
+        real-valued materials — because evanescent waves (beyond critical angle)
+        make cos(theta_layer) imaginary during propagation.
+
+        Args:
+            wvln: real tensor of wavelengths in μm.
+        Returns:
+            torch.complex64 tensor with the same shape as `wvln`.
+        """
+        if self.dispersion == "constant":
+            return torch.full(
+                wvln.shape, self._const_n, dtype=torch.complex64, device=wvln.device
+            )
+
+        elif self.dispersion == "sellmeier":
+            wvln2 = wvln**2
+            n2 = (
+                1.0
+                + self.k1 * wvln2 / (wvln2 - self.l1 + 1e-30)
+                + self.k2 * wvln2 / (wvln2 - self.l2 + 1e-30)
+                + self.k3 * wvln2 / (wvln2 - self.l3 + 1e-30)
+            )
+            n = torch.sqrt(torch.clamp(n2, min=1e-30))
+            return (n + 0j).to(torch.complex64)
+
+        elif self.dispersion == "interp":
+            self._ref_wvlns = self._ref_wvlns.to(wvln.device)
+            self._ref_n = self._ref_n.to(wvln.device)
+            ref_k = self._ref_k.to(wvln.device) if self._ref_k is not None else None
+            return _linear_interp_complex(wvln, self._ref_wvlns, self._ref_n, ref_k)
+
+        raise NotImplementedError(f"Dispersion {self.dispersion!r} not implemented.")
+
+    def refractive_index(self, wvln: "float | torch.Tensor"):
+        """Return the complex refractive index.
+
+        Args:
+            wvln: float (returns Python complex) or tensor (returns complex tensor).
+
+        Returns:
+            Python complex when wvln is a scalar, torch.complex64 tensor otherwise.
+        """
+        if isinstance(wvln, (int, float)):
+            t = torch.tensor([float(wvln)], device=self.device)
+            return complex(self.ior(t).item())
+        return self.ior(wvln)
+

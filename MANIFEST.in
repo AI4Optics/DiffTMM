@@ -4,3 +4,4 @@ include CITATION.cff
 prune benchmarks
 prune tmm_numpy
 exclude *.ipynb
+recursive-include difftmm/material/catalogs *.AGF *.json

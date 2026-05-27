@@ -7,9 +7,9 @@ for multi-layer film stacks with full autograd support.
 Copyright (c) 2026, Xinge Yang, Qingyuan Fan, Zhaocheng Liu.
 """
 
-import os
-
 import torch
+
+from .material import Material
 
 
 # =========================
@@ -24,7 +24,7 @@ def inv_sigmoid(x):
 def _batch_2x2_matmul(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     """
     Optimized batched 2x2 matrix multiplication.
-    
+
     For 2x2 matrices, explicit formula is faster than torch.matmul.
     A, B: shape (..., 2, 2)
     Returns: A @ B with shape (..., 2, 2)
@@ -34,18 +34,17 @@ def _batch_2x2_matmul(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     a10, a11 = A[..., 1, 0], A[..., 1, 1]
     b00, b01 = B[..., 0, 0], B[..., 0, 1]
     b10, b11 = B[..., 1, 0], B[..., 1, 1]
-    
+
     # Compute product elements
     c00 = a00 * b00 + a01 * b10
     c01 = a00 * b01 + a01 * b11
     c10 = a10 * b00 + a11 * b10
     c11 = a10 * b01 + a11 * b11
-    
+
     # Stack result
-    return torch.stack([
-        torch.stack([c00, c01], dim=-1),
-        torch.stack([c10, c11], dim=-1)
-    ], dim=-2)
+    return torch.stack(
+        [torch.stack([c00, c01], dim=-1), torch.stack([c10, c11], dim=-1)], dim=-2
+    )
 
 
 # =========================
@@ -207,11 +206,17 @@ def create_jones_matrix_isotropic(n_layers_1d, d_1d, wv_1d, n_in, n_out, theta_1
       Internally converts to equivalent forward problem with swapped media and reversed layers.
 
     Args:
-        n_layers_1d: refractive index of each layer, shape (batchsize, n_layer). Complex.
+        n_layers_1d: refractive index of each layer.
+                     Shape (batchsize, n_layer) — wavelength-independent, OR
+                     shape (batchsize, n_wls, n_layer) — dispersive per wavelength. Complex.
         d_1d: thicknesses of all layers, shape (batchsize, n_layer). Real or Complex.
         wv_1d: wavelengths of simulations, shape (batchsize, n_wls). Real.
-        n_in: incident media refractive index (top medium). Scalar.
-        n_out: transmit media refractive index (bottom medium). Scalar.
+        n_in: incident media refractive index (top medium).
+              Scalar (Python float/complex), OR tensor of shape (batchsize, n_wls)
+              for per-wavelength dispersive incident medium.
+        n_out: transmit media refractive index (bottom medium).
+               Scalar (Python float/complex), OR tensor of shape (batchsize, n_wls)
+               for per-wavelength dispersive exit medium.
         theta_1d: incident angles, shape (batchsize, n_angles). Real.
                   Range [0, pi]. Angles > pi/2 represent reverse propagation.
 
@@ -227,8 +232,20 @@ def create_jones_matrix_isotropic(n_layers_1d, d_1d, wv_1d, n_in, n_out, theta_1
     num_angles = theta_1d.shape[1]
     num_layer = d_1d.shape[1]
 
-    n_in_t = torch.tensor(n_in, dtype=dtype, device=device)
-    n_out_t = torch.tensor(n_out, dtype=dtype, device=device)
+    # Normalize n_in / n_out to (batch, num_wv, 1, 1) complex tensors so they
+    # broadcast correctly with the (batch, num_wv, num_angles, num_layer) tensors
+    # used inside _compute_isotropic_tmm.
+    def _to_per_wvln(x):
+        if torch.is_tensor(x) and x.dim() == 2:
+            # Already (batch, num_wv)
+            return x.to(dtype=dtype, device=device).unsqueeze(-1).unsqueeze(-1)
+        if torch.is_tensor(x) and x.dim() == 0:
+            x = x.item()
+        # Scalar (Python or 0-d tensor that we just unwrapped)
+        return torch.tensor(complex(x), dtype=dtype, device=device).view(1, 1, 1, 1)
+
+    n_in_t = _to_per_wvln(n_in)
+    n_out_t = _to_per_wvln(n_out)
 
     # Identify forward (theta <= pi/2) and reverse (theta > pi/2) angles
     pi_half = torch.pi / 2
@@ -237,12 +254,30 @@ def create_jones_matrix_isotropic(n_layers_1d, d_1d, wv_1d, n_in, n_out, theta_1
     # Fast path: if n_in == n_out (symmetric media), we can use a simpler approach
     # For symmetric media with symmetric layer stack, |r(theta)| = |r(pi-theta)|
     # We compute forward angles only and map results for reverse angles
-    if abs(n_in - n_out) < 1e-10:
+    # Fast path only when both media are scalar and equal
+    is_scalar_pair = (
+        not torch.is_tensor(n_in)
+        and not torch.is_tensor(n_out)
+        and abs(n_in - n_out) < 1e-10
+    )
+    if is_scalar_pair:
         # Map all angles to [0, pi/2] range
         theta_mapped = torch.where(is_reverse, torch.pi - theta_1d, theta_1d)
 
         # Expand dimensions (combined for fewer operations)
-        n_layers = n_layers_1d.unsqueeze(1).unsqueeze(2).to(dtype)
+        # Normalize n_layers to (batch, num_wv, 1, num_layer) complex
+        if n_layers_1d.dim() == 2:
+            # (batch, num_layer) — wavelength-independent
+            n_layers = (
+                n_layers_1d.unsqueeze(1).unsqueeze(2).to(dtype=dtype, device=device)
+            )
+        elif n_layers_1d.dim() == 3:
+            # (batch, num_wv, num_layer) — wavelength-dependent
+            n_layers = n_layers_1d.unsqueeze(2).to(dtype=dtype, device=device)
+        else:
+            raise ValueError(
+                f"n_layers_1d must be 2-D or 3-D, got shape {n_layers_1d.shape}"
+            )
         d = d_1d.unsqueeze(1).unsqueeze(2).to(dtype)
         wv = wv_1d.unsqueeze(2).unsqueeze(3).to(dtype)
         theta = theta_mapped.unsqueeze(1).unsqueeze(3).to(dtype)
@@ -285,7 +320,19 @@ def create_jones_matrix_isotropic(n_layers_1d, d_1d, wv_1d, n_in, n_out, theta_1
 
         # For simplicity, process all angles but only use results for forward ones
         # Expand dimensions for broadcasting
-        n_layers = n_layers_1d.unsqueeze(1).unsqueeze(2).to(dtype)  # (batch, 1, 1, layer)
+        # Normalize n_layers to (batch, num_wv, 1, num_layer) complex
+        if n_layers_1d.dim() == 2:
+            # (batch, num_layer) — wavelength-independent
+            n_layers = (
+                n_layers_1d.unsqueeze(1).unsqueeze(2).to(dtype=dtype, device=device)
+            )
+        elif n_layers_1d.dim() == 3:
+            # (batch, num_wv, num_layer) — wavelength-dependent
+            n_layers = n_layers_1d.unsqueeze(2).to(dtype=dtype, device=device)
+        else:
+            raise ValueError(
+                f"n_layers_1d must be 2-D or 3-D, got shape {n_layers_1d.shape}"
+            )
         d = d_1d.unsqueeze(1).unsqueeze(2).to(dtype)
         theta = theta_1d.unsqueeze(1).unsqueeze(3).to(dtype)  # (batch, 1, angles, 1)
 
@@ -322,11 +369,24 @@ def create_jones_matrix_isotropic(n_layers_1d, d_1d, wv_1d, n_in, n_out, theta_1
         theta_rev = torch.pi - theta_1d  # (batch, angles)
 
         # Reverse layer order
-        n_layers_rev = torch.flip(n_layers_1d, dims=[1])
+        # Flip the layer axis (last dim works for both 2-D and 3-D)
+        n_layers_rev = torch.flip(n_layers_1d, dims=[-1])
         d_rev = torch.flip(d_1d, dims=[1])
 
         # Expand dimensions
-        n_layers_rev_exp = n_layers_rev.unsqueeze(1).unsqueeze(2).to(dtype)
+        # Normalize n_layers to (batch, num_wv, 1, num_layer) complex
+        if n_layers_rev.dim() == 2:
+            # (batch, num_layer) — wavelength-independent
+            n_layers_rev_exp = (
+                n_layers_rev.unsqueeze(1).unsqueeze(2).to(dtype=dtype, device=device)
+            )
+        elif n_layers_rev.dim() == 3:
+            # (batch, num_wv, num_layer) — wavelength-dependent
+            n_layers_rev_exp = n_layers_rev.unsqueeze(2).to(dtype=dtype, device=device)
+        else:
+            raise ValueError(
+                f"n_layers_1d must be 2-D or 3-D, got shape {n_layers_1d.shape}"
+            )
         d_rev_exp = d_rev.unsqueeze(1).unsqueeze(2).to(dtype)
         theta_rev_exp = theta_rev.unsqueeze(1).unsqueeze(3).to(dtype)
 
@@ -364,16 +424,16 @@ class IsotropicFilmSolver:
     """Multi-layer coating film solver for isotropic materials.
 
     Uses the standard 2x2 transfer matrix method which is much faster
-    than the general 4x4 anisotropic formulation. This solver calculates 
-    (ts, tp, rs, rp) with phase shifts using rigorous electromagnetic wave 
+    than the general 4x4 anisotropic formulation. This solver calculates
+    (ts, tp, rs, rp) with phase shifts using rigorous electromagnetic wave
     propagation through multi-layer coating stacks.
     """
 
     def __init__(
         self,
-        mat_n_in,
-        mat_n_out,
-        mat_n_ls,
+        mat_in,
+        mat_out,
+        mat_ls,
         thickness_ls=None,
         thickness_min=0.0,
         thickness_max=0.2,
@@ -385,9 +445,10 @@ class IsotropicFilmSolver:
         Initialize the isotropic film solver.
 
         Args:
-            mat_n_in: Refractive index of incident medium (scalar).
-            mat_n_out: Refractive index of exit medium (scalar).
-            mat_n_ls: Refractive indices of interior layers, list or tensor of length N.
+            mat_in: Refractive index of incident medium. float, complex, or str material name.
+            mat_out: Refractive index of exit medium. Same types as mat_in.
+            mat_ls: Refractive indices of interior layers. List of float/complex
+                      scalars or str material names.
             thickness_ls: Thicknesses of interior layers in um, list or tensor of length N.
                           If None, randomly initializes thicknesses.
             thickness_min: Minimum layer thickness in um.
@@ -396,57 +457,54 @@ class IsotropicFilmSolver:
             sigmoid_param: If True, use sigmoid parameterization for thickness.
             device: PyTorch device.
         """
-        # Parameters
         self.batch_size = batch_size
-        self.mat_n_in = float(mat_n_in)
-        self.mat_n_out = float(mat_n_out)
         self.device = device
 
-        # Set up refractive indices for each layer
-        if torch.is_tensor(mat_n_ls):
-            n_layers_t = mat_n_ls.to(torch.complex64)
-        else:
-            n_layers_t = torch.tensor(mat_n_ls, dtype=torch.complex64)
-        self.num_layers = len(n_layers_t)
-        self.refract_idx_layers = n_layers_t.unsqueeze(0).expand(self.batch_size, -1).clone()
+        self.mat_in = Material(mat_in, device=device)
+        self.mat_out = Material(mat_out, device=device)
+        self.mat_ls = [Material(s, device=device) for s in mat_ls]
+        self.num_layers = len(self.mat_ls)
 
-        # Min and max single layer film thickness in [um]
         self.thickness_min = thickness_min
         self.thickness_max = thickness_max
-        self._thickness_range = self.thickness_max - self.thickness_min  # Pre-compute
+        self._thickness_range = self.thickness_max - self.thickness_min
 
-        # Initialize film_params in normalized [0, 1] space
         self.sigmoid_param = sigmoid_param
         if thickness_ls is not None:
             if not torch.is_tensor(thickness_ls):
                 thickness_ls = torch.tensor(thickness_ls, dtype=torch.float32)
-            normalized = (thickness_ls.clamp(self.thickness_min, self.thickness_max) - self.thickness_min) / self._thickness_range
-            self.film_params = normalized.unsqueeze(0).expand(self.batch_size, -1).clone()
+            normalized = (
+                thickness_ls.clamp(self.thickness_min, self.thickness_max)
+                - self.thickness_min
+            ) / self._thickness_range
+            self.film_params = normalized.unsqueeze(0).expand(batch_size, -1).clone()
         else:
-            self.film_params = torch.randn(self.batch_size, self.num_layers) * 0.01 + 0.5
+            self.film_params = torch.randn(batch_size, self.num_layers) * 0.01 + 0.5
 
-        # Convert to sigmoid (logit) parameterization if requested
         if self.sigmoid_param:
             self.film_params = inv_sigmoid(self.film_params.clamp(1e-6, 1 - 1e-6))
 
-        # Move to device
         self.to(device)
 
     def to(self, device):
         """Move tensors to specified device."""
         self.device = device
         self.film_params = self.film_params.to(device, non_blocking=True)
-        self.refract_idx_layers = self.refract_idx_layers.to(device, non_blocking=True)
+        self.mat_in.to(device)
+        self.mat_out.to(device)
+        for m in self.mat_ls:
+            m.to(device)
         return self
 
     def load_ckpt(self, ckpt_path):
-        """Load checkpoint from file path."""
-        ckpt = torch.load(ckpt_path, map_location=self.device, weights_only=True)
-        film_thickness = torch.clamp(ckpt["film_thickness"], self.thickness_min, self.thickness_max)
+        """Load thicknesses (and spec metadata) from a checkpoint."""
+        ckpt = torch.load(ckpt_path, map_location=self.device, weights_only=False)
+        film_thickness = torch.clamp(
+            ckpt["film_thickness"], self.thickness_min, self.thickness_max
+        )
         film_thickness_normalized = (film_thickness - self.thickness_min) / (
             self.thickness_max - self.thickness_min
         )
-
         if self.sigmoid_param:
             film_thickness_normalized = torch.clamp(
                 film_thickness_normalized, 1e-6, 1 - 1e-6
@@ -455,19 +513,26 @@ class IsotropicFilmSolver:
         else:
             self.film_params = film_thickness_normalized.to(self.device)
 
+        if "mat_ls" in ckpt:
+            self.mat_in = Material(ckpt["mat_in"], device=self.device)
+            self.mat_out = Material(ckpt["mat_out"], device=self.device)
+            self.mat_ls = [Material(v, device=self.device) for v in ckpt["mat_ls"]]
+
     def save_ckpt(self, save_path):
-        """Save checkpoint."""
-        torch.save(
-            {
-                "film_thickness": self.get_film_thickness().cpu(),
-                "batch_size": self.batch_size,
-                "num_layers": self.num_layers,
-                "n_in": self.mat_n_in,
-                "n_out": self.mat_n_out,
-                "refract_idx_layers": self.refract_idx_layers.cpu(),
-            },
-            save_path,
-        )
+        """Save thicknesses and material specs to a checkpoint.
+
+        Material objects are persisted by name; scalars are persisted by value.
+        Per-axis 3-tuples are persisted element-wise.
+        """
+        payload = {
+            "film_thickness": self.get_film_thickness().cpu(),
+            "batch_size": self.batch_size,
+            "num_layers": self.num_layers,
+            "mat_in": self.mat_in.name,
+            "mat_out": self.mat_out.name,
+            "mat_ls": [m.name for m in self.mat_ls],
+        }
+        torch.save(payload, save_path)
 
     # ===========================================
     # Film simulation
@@ -481,17 +546,61 @@ class IsotropicFilmSolver:
         """
         if self.sigmoid_param:
             film_thickness = (
-                torch.sigmoid(self.film_params) * self._thickness_range + self.thickness_min
+                torch.sigmoid(self.film_params) * self._thickness_range
+                + self.thickness_min
             )
         else:
-            film_thickness = self.film_params * self._thickness_range + self.thickness_min
-            film_thickness = film_thickness.clamp(self.thickness_min, self.thickness_max)
+            film_thickness = (
+                self.film_params * self._thickness_range + self.thickness_min
+            )
+            film_thickness = film_thickness.clamp(
+                self.thickness_min, self.thickness_max
+            )
 
         return film_thickness
 
-    def simulate(self, theta, wvln):
+    def _prepare_simulate_inputs(self, theta, wvln):
+        """Normalize theta/wvln user inputs and return the tensors simulate() needs.
+
+        Args:
+            theta: angles in radians; same accepted forms as simulate().
+            wvln:  wavelengths in um; same accepted forms as simulate().
+
+        Returns:
+            theta:      (batch_size, n_angles) float tensor on self.device.
+            wv_batch:   (batch_size, n_wvlns) float tensor on self.device.
+            d_batch:    (batch_size, num_layers) float tensor — current film thicknesses.
+            n_in_t:     (batch_size, n_wvlns) tensor — incident-medium refractive index per wavelength.
+            n_out_t:    (batch_size, n_wvlns) tensor — exit-medium refractive index per wavelength.
+            n_layers_t: (batch_size, n_wvlns, num_layers) tensor — per-layer refractive index per wavelength.
         """
-        Calculate (ts, tp, rs, rp) using TMM for specified angles and wavelengths.
+        if not torch.is_tensor(theta):
+            theta = torch.tensor(theta, dtype=torch.float32, device=self.device)
+        theta = theta.to(self.device)
+        if theta.dim() == 1:
+            theta = theta.unsqueeze(0).expand(self.batch_size, -1)
+
+        if torch.is_tensor(wvln):
+            wv = wvln.to(self.device)
+            if wv.dim() == 0:
+                wv = wv.unsqueeze(0)
+        elif isinstance(wvln, (list, tuple)):
+            wv = torch.tensor(wvln, dtype=torch.float32, device=self.device)
+        else:
+            wv = torch.tensor([wvln], dtype=torch.float32, device=self.device)
+        wv_batch = wv.unsqueeze(0).expand(self.batch_size, -1)
+
+        n_in_t = self.mat_in.ior(wv).unsqueeze(0).expand(self.batch_size, -1)
+        n_out_t = self.mat_out.ior(wv).unsqueeze(0).expand(self.batch_size, -1)
+        per_layer = [m.ior(wv) for m in self.mat_ls]
+        n_layers_t = torch.stack(per_layer, dim=-1)
+        n_layers_t = n_layers_t.unsqueeze(0).expand(self.batch_size, -1, -1)
+
+        d_batch = self.get_film_thickness()
+        return theta, wv_batch, d_batch, n_in_t, n_out_t, n_layers_t
+
+    def simulate(self, theta, wvln):
+        """Calculate (ts, tp, rs, rp) using TMM for specified angles and wavelengths.
 
         Args:
             theta: Incident angles in radians. Can be:
@@ -505,33 +614,14 @@ class IsotropicFilmSolver:
             ts, tp, rs, rp: Complex transmission/reflection coefficients.
                            Shape: (batch_size, n_wvlns, n_angles)
         """
-        # Handle theta input
-        if not torch.is_tensor(theta):
-            theta = torch.tensor(theta, dtype=torch.float32, device=self.device)
-        theta = theta.to(self.device)
-        if theta.dim() == 1:
-            theta = theta.unsqueeze(0).expand(self.batch_size, -1)
-
-        # Handle wavelength input
-        if torch.is_tensor(wvln):
-            wv = wvln.to(self.device)
-            if wv.dim() == 0:
-                wv = wv.unsqueeze(0)
-        elif isinstance(wvln, (list, tuple)):
-            wv = torch.tensor(wvln, dtype=torch.float32, device=self.device)
-        else:
-            wv = torch.tensor([wvln], dtype=torch.float32, device=self.device)
-        wv_batch = wv.unsqueeze(0).expand(self.batch_size, -1)
-
-        # Get film thickness and compute TMM results
-        d_batch = self.get_film_thickness()
-        ts, tp, rs, rp = create_jones_matrix_isotropic(
-            self.refract_idx_layers, d_batch, wv_batch, self.mat_n_in, self.mat_n_out, theta
+        theta, wv_batch, d_batch, n_in_t, n_out_t, n_layers_t = (
+            self._prepare_simulate_inputs(theta, wvln)
         )
-
+        ts, tp, rs, rp = create_jones_matrix_isotropic(
+            n_layers_t, d_batch, wv_batch, n_in_t, n_out_t, theta
+        )
         return ts, tp, rs, rp
 
     def __call__(self, theta, wvln):
         """Forward pass using simulate."""
         return self.simulate(theta, wvln)
-
