@@ -100,6 +100,34 @@ solver = Solver(
 ts, tp, rs, rp = solver.simulate(theta, wvln)
 ```
 
+## Real Materials
+
+DiffTMM ships with wavelength-dependent refractive index support via the
+`Material` class. Look up materials by name (case-insensitive):
+
+```python
+from difftmm import IsotropicFilmSolver, Material, list_materials
+
+# Bundled catalogs: CDGM/SCHOTT/MISC AGF glasses + thin-film n+k tables
+print(len(list_materials()), "materials available")
+
+# Pass material names directly to a solver — they're auto-wrapped in Material()
+solver = IsotropicFilmSolver(
+    mat_n_in="air",
+    mat_n_out="N-BK7",                  # Sellmeier (AGF)
+    mat_n_ls=["TiO2", "SiO2"],          # n+k tables for thin-film materials
+    thickness_ls=[0.06, 0.10],
+)
+ts, tp, rs, rp = solver.simulate(theta=angles, wvln=[0.45, 0.55, 0.65])
+```
+
+Scalars, strings, and `Material` objects can be mixed freely in `mat_n_ls`.
+For the 4×4 `FilmSolver`, anisotropic per-axis dispersion is expressed as
+a `(mat_x, mat_y, mat_z)` tuple per layer.
+
+Dispersion models supported in v1: **Sellmeier** (analytical, real n) and
+**linear interpolation** (lookup tables, complex n + ik).
+
 ## Accuracy Validation
 
 Validated against the reference NumPy TMM library ([sbyrnes321/tmm](https://github.com/sbyrnes321/tmm)) on surface plasmon resonance (SPR) calculations:
@@ -132,21 +160,21 @@ The isotropic 2x2 solver uses ~5x less GPU memory than the anisotropic 4x4 solve
 ## Repository Structure
 
 ```
-├── difftmm/                        # Importable package
-│   ├── __init__.py                 #   Public API
-│   ├── film_solver_isotropic.py    #   2x2 isotropic solver (fast)
-│   └── film_solver_anisotropic.py  #   4x4 anisotropic solver (general)
-├── 1_forward_simu.ipynb            # Example: forward simulation
-├── 2_inverse_design.ipynb          # Example: differentiable inverse design
-├── tmm_numpy/                      # Reference NumPy TMM library (isotropic only)
-│   ├── tmm_core.py                 #   Steven Byrnes' TMM implementation
-│   └── manual.pdf                  #   Physics reference
-├── benchmarks/                     # Accuracy and performance benchmarks
-│   ├── 1_compare_angle_response_*.py
-│   ├── 2_compare_speed.py
-│   └── 3_compare_memory.py
-├── pyproject.toml                  # Packaging metadata
-├── CITATION.cff                    # Citation metadata
+├── difftmm/                            # Importable package
+│   ├── __init__.py                     #   Public API
+│   ├── film_solver_isotropic.py        #   2x2 isotropic solver (fast)
+│   ├── film_solver_anisotropic.py      #   4x4 anisotropic solver (general)
+│   └── material/                       #   Wavelength-dependent materials
+│       ├── __init__.py
+│       ├── materials.py                #     Material class, loaders, resolve_indices
+│       └── catalogs/                   #     Bundled glass + thin-film data
+├── 1_forward_simu.ipynb                # Example: forward simulation
+├── 2_inverse_design.ipynb              # Example: differentiable inverse design
+├── 3_real_materials.ipynb              # Example: real materials
+├── tmm_numpy/                          # Reference NumPy TMM library
+├── benchmarks/                         # Accuracy and performance benchmarks
+├── tests/                              # Pytest suite
+├── pyproject.toml
 └── README.md
 ```
 
