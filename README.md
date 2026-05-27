@@ -4,13 +4,13 @@ A PyTorch-based differentiable thin film solver for multi-layer optical coatings
 
 ## Advantages over NumPy TMM
 
-| Feature | NumPy TMM ([sbyrnes321/tmm](https://github.com/sbyrnes321/tmm)) | DiffTMM |
-|---------|------------------------------------------------------------------|---------|
-| Differentiable | No | Yes (PyTorch autograd) |
-| GPU acceleration | No (CPU only) | Yes (CUDA) |
-| Batch processing | No (sequential) | Yes (vectorized) |
-| Anisotropic materials | No (isotropic only) | Yes (4x4 transfer matrix) |
-| Speed (batch=16) | 1x baseline | **~200x** (isotropic 2x2) |
+| Feature               | NumPy TMM ([sbyrnes321/tmm](https://github.com/sbyrnes321/tmm)) | DiffTMM                                                            |
+| --------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------ |
+| Differentiable        | No                                                           | Yes (PyTorch autograd)                                             |
+| GPU acceleration      | No (CPU only)                                                | Yes (CUDA)                                                         |
+| Batch processing      | No (sequential)                                              | Yes (vectorized)                                                   |
+| Anisotropic materials | No (isotropic only)                                          | Yes (4x4 transfer matrix)                                          |
+| Speed (batch=16)      | 1x baseline                                                  | **~190x** (isotropic 2x2), **~134x** (anisotropic 4x4) |
 
 ## Installation
 
@@ -32,9 +32,9 @@ from difftmm import IsotropicFilmSolver
 
 # Define film stack: Glass | Ta2O5 | SiO2 | Ta2O5 | Glass
 solver = IsotropicFilmSolver(
-    mat_n_in=1.5,                         # incident medium
-    mat_n_out=1.5,                        # exit medium
-    mat_n_ls=[2.10, 1.46, 2.10],          # interior layer indices
+    mat_in=1.5,                           # incident medium
+    mat_out=1.5,                          # exit medium
+    mat_ls=[2.10, 1.46, 2.10],            # interior layer indices
     thickness_ls=[0.080, 0.120, 0.080],   # thicknesses in um
     device=torch.device("cuda"),
 )
@@ -84,16 +84,16 @@ Layer     GT (nm)   Recovered (nm)    Error (nm)
 
 ## Two Solvers
 
-- **`difftmm.IsotropicFilmSolver`** — Fast 2x2 transfer matrix method for isotropic materials (~200x faster than NumPy TMM)
-- **`difftmm.FilmSolver`** (also `AnisotropicFilmSolver`) — General 4x4 transfer matrix method for both isotropic and anisotropic materials
+- **`difftmm.IsotropicFilmSolver`** — Fast 2x2 transfer matrix method for isotropic materials (~190x faster than NumPy TMM)
+- **`difftmm.FilmSolver`** (also `AnisotropicFilmSolver`) — General 4x4 transfer matrix method for both isotropic and anisotropic materials (~134x faster than NumPy TMM)
 
 Both solvers share the same API:
 
 ```python
 solver = Solver(
-    mat_n_in=1.0,                  # incident medium refractive index
-    mat_n_out=1.52,                # exit medium refractive index
-    mat_n_ls=[2.1, 1.46],          # interior layer refractive indices
+    mat_in=1.0,                    # incident medium refractive index
+    mat_out=1.52,                  # exit medium refractive index
+    mat_ls=[2.1, 1.46],            # interior layer refractive indices
     thickness_ls=[0.08, 0.12],     # thicknesses in um (optional, random if None)
     device=torch.device("cuda"),
 )
@@ -113,15 +113,15 @@ print(len(list_materials()), "materials available")
 
 # Pass material names directly to a solver — they're auto-wrapped in Material()
 solver = IsotropicFilmSolver(
-    mat_n_in="air",
-    mat_n_out="N-BK7",                  # Sellmeier (AGF)
-    mat_n_ls=["TiO2", "SiO2"],          # n+k tables for thin-film materials
+    mat_in="air",
+    mat_out="N-BK7",                    # Sellmeier (AGF)
+    mat_ls=["TiO2", "SiO2"],            # n+k tables for thin-film materials
     thickness_ls=[0.06, 0.10],
 )
 ts, tp, rs, rp = solver.simulate(theta=angles, wvln=[0.45, 0.55, 0.65])
 ```
 
-Scalars, strings, and `Material` objects can be mixed freely in `mat_n_ls`.
+Scalars (float/complex) and strings can be mixed freely in `mat_ls`.
 For the 4×4 `FilmSolver`, anisotropic per-axis dispersion is expressed as
 a `(mat_x, mat_y, mat_z)` tuple per layer.
 
@@ -140,22 +140,22 @@ The anisotropic 4x4 solver is validated for energy conservation, isotropic limit
 
 ## Performance Benchmarks
 
-### Speed (batch=16, NVIDIA A100)
+### Speed (batch=16, NVIDIA RTX 5090)
 
 ![Speed Comparison](https://raw.githubusercontent.com/singer-yang/DiffTMM/main/benchmarks/speed_comparison_tmm_vs_film_solver_batch.png)
 
 | Layers | TMM NumPy (s) | Anisotropic 4x4 (s) | Isotropic 2x2 (s) | Speedup (4x4) | Speedup (2x2) |
-|--------|---------------|----------------------|--------------------|---------------|---------------|
-| 3      | 0.389         | 0.043                | 0.002              | 9.1x          | 250.6x        |
-| 11     | 0.782         | 0.135                | 0.004              | 5.8x          | 192.3x        |
-| 25     | 1.463         | 0.291                | 0.008              | 5.0x          | 194.7x        |
-| 39     | 2.145         | 0.455                | 0.011              | 4.7x          | 197.2x        |
+| ------ | ------------- | ------------------- | ----------------- | ------------- | ------------- |
+| 3      | 0.281         | 0.003               | 0.001             | 84.1x         | 233.0x        |
+| 11     | 0.577         | 0.005               | 0.003             | 128.4x        | 201.1x        |
+| 25     | 1.076         | 0.008               | 0.006             | 133.7x        | 186.4x        |
+| 39     | 1.574         | 0.010               | 0.009             | 165.1x        | 182.2x        |
 
 ### GPU Memory (batch=16, forward + backward)
 
 ![Memory Comparison](https://raw.githubusercontent.com/singer-yang/DiffTMM/main/benchmarks/memory_comparison_solvers.png)
 
-The isotropic 2x2 solver uses ~5x less GPU memory than the anisotropic 4x4 solver. NumPy TMM is CPU-only (0 GPU memory).
+The isotropic 2x2 solver uses ~23x less GPU memory than the anisotropic 4x4 solver. NumPy TMM is CPU-only (0 GPU memory).
 
 ## Repository Structure
 
@@ -166,7 +166,7 @@ The isotropic 2x2 solver uses ~5x less GPU memory than the anisotropic 4x4 solve
 │   ├── film_solver_anisotropic.py      #   4x4 anisotropic solver (general)
 │   └── material/                       #   Wavelength-dependent materials
 │       ├── __init__.py
-│       ├── materials.py                #     Material class, loaders, resolve_indices
+│       ├── materials.py                #     Material class and catalog loaders
 │       └── catalogs/                   #     Bundled glass + thin-film data
 ├── 1_forward_simu.ipynb                # Example: forward simulation
 ├── 2_inverse_design.ipynb              # Example: differentiable inverse design

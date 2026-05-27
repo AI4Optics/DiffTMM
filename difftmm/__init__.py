@@ -9,7 +9,6 @@ from .film_solver_anisotropic import (
 from .material import (
     Material,
     list_materials,
-    resolve_indices,
 )
 
 AnisotropicFilmSolver = FilmSolver
@@ -22,5 +21,4 @@ __all__ = [
     "create_jones_matrix_AOIAz",
     "Material",
     "list_materials",
-    "resolve_indices",
 ]
